@@ -4274,6 +4274,7 @@ void *thread_process_bsgs_random(void *vargp)	{
 
 	tt = (struct tothread *)vargp;
 	thread_number = tt->nt;
+	uint64_t rng_state = mix_u64((uint64_t)time(NULL) ^ ((uint64_t)thread_number << 32) ^ (uint64_t)(uintptr_t)&rng_state);
 	free(tt);
 	
 	cycles = bsgs_aux / 1024;
@@ -4285,19 +4286,9 @@ void *thread_process_bsgs_random(void *vargp)	{
 	intaux.Mult(CPU_GRP_SIZE/2);
 	intaux.Add(&BSGS_M);
 
-	do	{
-		
-	
-	/*          | Start Range	| End Range     |
-		None	| 1             | EC.N          |
-		-b	bit | Min bit value | Max bit value |
-		-r	A:B | A             | B             |
-	*/
-#if defined(_WIN64) && !defined(__CYGWIN__)
-		WaitForSingleObject(bsgs_thread, INFINITE);
-#else
-		pthread_mutex_lock(&bsgs_thread);
-#endif
+	do {
+		// Gerar chave aleatória com RNG por thread (sem mutex)
+		base_key.Rand(&n_range_start,&n_range_end);
 
 		base_key.Rand(&n_range_start,&n_range_end);
 #if defined(_WIN64) && !defined(__CYGWIN__)

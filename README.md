@@ -65,6 +65,13 @@ Baby-Step Giant-Step. Algoritmo rápido para ranges conhecidos, mas requer muita
 - Você tem RAM suficiente (mínimo 4GB, ideal 16GB+)
 - Conhece o intervalo exato da chave
 
+**Modos de busca:**
+- `-B sequential` - Do início ao fim (padrão)
+- `-B backward` - Do fim para o início
+- `-B both` - Metade das threads para cada lado (mais rápido)
+- `-B random` - Posições aleatórias (puzzles)
+- `-B dance` - Mix aleatório de todos modos
+
 **Parâmetros principais:**
 - `-f` - Arquivo com as public keys-alvo
 - `-b` - Bit range
@@ -77,6 +84,9 @@ Baby-Step Giant-Step. Algoritmo rápido para ranges conhecidos, mas requer muita
 ```bash
 # BSGS normal com 8 threads
 ./BSGS/modo-bsgs -f Puzzles/66.txt -b 66 -t 8
+
+# BSGS modo random (para puzzles)
+./BSGS/modo-bsgs -B random -f Puzzles/66.txt -b 66 -t 8
 
 # Com mais RAM (k=32)
 ./BSGS/modo-bsgs -f Puzzles/66.txt -b 66 -k 32 -t 16
