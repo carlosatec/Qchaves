@@ -61,11 +61,14 @@ Motor de alta performance baseado no algoritmo *Pollard's Kangaroo*, agora total
 - **Independência Total**: Não requer orquestradores externos para a lógica de saltos.
 - **Multithreading Nativo**: Escala linearmente com todos os núcleos da CPU (`-t`).
 - **Nomenclatura por Range**: Suporta a flag `-b` para organizar checkpoints de forma granular (ex: #66, #120).
-- **Memória Infinita (Archive)**: Descarrega armadilhas excedentes para `traps_archive.bin`, permitindo acumular bilhões de pistas em disco.
+- **Checkpoint Portátil v3**: Salva e retoma o estado da frota, traps em RAM e parâmetros ativos de tuning.
+- **Archive por Shard**: Descarrega armadilhas excedentes para arquivos `traps_archive_shard_*.bin`, reduzindo custo do caminho de disco.
+- **Tuning em Runtime**: Permite ajustar saltos ativos com `-j` e a quantidade de kangaroos `wild` com `-w`.
+- **Hot Path Otimizado**: Distâncias saíram do GMP no loop principal e o cache afim foi reaproveitado para reduzir custo por hop.
 - **Uso ideal**: O melhor para ranges gigantes (ex: puzzles 100+) onde o BSGS consumiria RAM impossível.
 - **Exemplo (Puzzle 130):**
   ```bash
-  ./kangaroo/modo-kangaroo -p <PUBKEY_HEX> -b 130 -r 0:FFFFFFFFFFFFFFFF -t 12 -d 20
+  ./kangaroo/modo-kangaroo -p <PUBKEY_HEX> -b 130 -r 0:FFFFFFFFFFFFFFFF -t 12 -d 22 -j 48 -w 40
   ```
 
 ---
@@ -79,8 +82,9 @@ Implementamos um sistema de persistência robusto e interativo em todos os motor
    - `address_bit66.ckp`
    - `bsgs_bit66.ckp`
    - `kangaroo_bit66.ckp`
-2. **Prompt de Confirmação**: Ao iniciar uma busca, se um checkpoint compatível for detectado, o programa perguntará:
-   `[?] Checkpoint detectado: [arquivo]. Deseja retomar a busca? (s/n):`
+2. **Retomada de Checkpoint**:
+   - `modo-address` e `modo-bsgs` mantêm o fluxo interativo de confirmação ao detectar checkpoint compatível.
+   - `modo-kangaroo` carrega automaticamente checkpoints compatíveis do formato atual.
 3. **Resiliência de Energia (Auto-Save)**: O progresso é salvo automaticamente a cada **5 minutos**.
 4. **Interrupção Segura (Ctrl+C)**: Todos os módulos capturam o sinal de interrupção e realizam um salvamento de emergência do estado exato antes de fechar.
 
@@ -120,6 +124,8 @@ Aqui estão os detalhes técnicos dos comandos mais utilizados:
 | **`-t`** | **Threads**: Número de núcleos do CPU para processamento. | `-t 8` (Usa 8 núcleos) |
 | **`-k`** | **K-Factor**: Fator de memória (RAM) para o BSGS. | `-k 1024` (Usa ~16GB RAM) |
 | **`-s`** | **Stats Interval**: Frequência de atualização (em segundos). | `-s 10` (Atualiza a cada 10s) |
+| **`-j`** | **Active Jumps**: Número de saltos ativos do Kangaroo. | `-j 48` |
+| **`-w`** | **Active Wild**: Número de kangaroos `wild` na frota do Kangaroo. | `-w 40` |
 
 ### 🛠️ Configurando Performance e Memória
 
