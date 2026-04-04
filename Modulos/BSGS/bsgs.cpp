@@ -633,7 +633,17 @@ void save_checkpoint_bsgs(int bits) {
         char *range_start_hex = range_start_snapshot.GetBase16();
         char *range_end_hex = range_end_snapshot.GetBase16();
         char *current_hex = current_snapshot.GetBase16();
-        fprintf(f, "BSGS2\n%d\n%d\n%s\n%s\n%s\n", bits, mode_snapshot, range_start_hex, range_end_hex, current_hex);
+        
+        fprintf(f, "BSGS3\n%d\n%d\n%s\n%s\n%s\n", bits, mode_snapshot, range_start_hex, range_end_hex, current_hex);
+        
+        if (bsgs_point_number > 0 && bsgs_found != NULL) {
+            fwrite(&bsgs_point_number, sizeof(uint32_t), 1, f);
+            fwrite(bsgs_found, sizeof(int), bsgs_point_number, f);
+        } else {
+            uint32_t zero = 0;
+            fwrite(&zero, sizeof(uint32_t), 1, f);
+        }
+        
         fclose(f);
         free(range_start_hex);
         free(range_end_hex);
@@ -653,7 +663,7 @@ bool load_checkpoint_bsgs(int bits) {
         int fbits = 0;
         int mode_snapshot = 0;
         if (fscanf(f, "%15s", magic) == 1) {
-            if (strcmp(magic, "BSGS2") == 0) {
+            if (strcmp(magic, "BSGS3") == 0) {
                 if (fscanf(f, "%d\n%d\n%127s\n%127s\n%127s\n", &fbits, &mode_snapshot, range_start_hex, range_end_hex, current_hex) == 5 && fbits == bits) {
                     if (should_resume_bsgs_checkpoint(filename)) {
                         n_range_start.SetBase16(range_start_hex);
@@ -661,6 +671,27 @@ bool load_checkpoint_bsgs(int bits) {
                         BSGS_CURRENT.SetBase16(current_hex);
                         FLAGBSGSMODE = mode_snapshot;
                         printf("[+] Retomando BSGS_CURRENT: 0x%s\n", current_hex);
+                        
+                        uint32_t saved_point_count = 0;
+                        if (fread(&saved_point_count, sizeof(uint32_t), 1, f) == 1 && saved_point_count > 0) {
+                            if (bsgs_found != NULL && saved_point_count == bsgs_point_number) {
+                                fread(bsgs_found, sizeof(int), saved_point_count, f);
+                                printf("[+] Restaurado bsgs_found para %u alvos\n", saved_point_count);
+                            }
+                        }
+                        
+                        fclose(f);
+                        return true;
+                    }
+                }
+            } else if (strcmp(magic, "BSGS2") == 0) {
+                if (fscanf(f, "%d\n%d\n%127s\n%127s\n%127s\n", &fbits, &mode_snapshot, range_start_hex, range_end_hex, current_hex) == 5 && fbits == bits) {
+                    if (should_resume_bsgs_checkpoint(filename)) {
+                        n_range_start.SetBase16(range_start_hex);
+                        n_range_end.SetBase16(range_end_hex);
+                        BSGS_CURRENT.SetBase16(current_hex);
+                        FLAGBSGSMODE = mode_snapshot;
+                        printf("[+] Retomando BSGS_CURRENT: 0x%s (formato legado)\n", current_hex);
                         fclose(f);
                         return true;
                     }
@@ -670,7 +701,7 @@ bool load_checkpoint_bsgs(int bits) {
                     if (should_resume_bsgs_checkpoint(filename)) {
                         n_range_start.SetBase16(current_hex);
                         BSGS_CURRENT.SetBase16(current_hex);
-                        printf("[+] Retomando da posição: 0x%s\n", current_hex);
+                        printf("[+] Retomando da posição: 0x%s (formato legado)\n", current_hex);
                         fclose(f);
                         return true;
                     }

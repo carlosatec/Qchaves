@@ -57,7 +57,7 @@ O motor de busca por endereços clássico, agora refatorado para performance ext
 
 ### 👶 2. BSGS Engine (`modo-bsgs`)
 Implementação do algoritmo *Baby-step Giant-step*.
-- **Checkpoint Revisado:** O formato atual salva range e progresso global do BSGS com compatibilidade para checkpoint legado.
+- **Checkpoint v3:** Formato atual salva range, progresso, modo BSGS e estado `bsgs_found` para múltiplos alvos, com compatibilidade retroativa (BSGS/BSGS2/BSGS3).
 - **Validação Final Endurecida:** A confirmação final passou a comparar o ponto completo, não apenas `x`.
 - **Workers Mais Seguros:** Melhorias de concorrência em `steps/ends`, `bsgs_found` com visibilidade mais consistente e RNG local por thread nos modos randômicos.
 - **RNG por Thread:** Modos randômicos agora usam `thread_rng_next_bounded()` com estado independente por thread.
