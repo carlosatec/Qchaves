@@ -179,3 +179,12 @@ As chaves encontradas não são apenas exibidas, mas salvas permanentemente.
 > - Para o **BSGS**, o parâmetro `-k` (fator de memória) agora é 50% mais eficiente graças ao Cuckoo Filter.
 > - O **modo-address** agora utiliza atualização incremental de ponto (v2.1), tornando-o significativamente mais rápido em buscas sequenciais.
 > - Ao encontrar uma chave, use o **WIF Format** gerado no console para importar diretamente seus fundos sem precisar de conversores externos.
+
+---
+
+## 🤝 Créditos & Referências
+
+Este projeto foi construído e otimizado com base em excelentes trabalhos da comunidade. Agradecimentos especiais aos desenvolvedores dos projetos que serviram de base:
+
+- [Cacachave](https://github.com/lmajowka/cacachave)
+- [Keyhunt](https://github.com/albertobsd/keyhunt)
