@@ -21,6 +21,7 @@
 
 #include "hash/sha256.h"
 #include "hash/ripemd160.h"
+#include "../../libs/hardware_profile.h"
 
 #if defined(_WIN64) && !defined(__CYGWIN__)
 #include "getopt.h"
@@ -281,6 +282,113 @@ int KFACTOR = 1;
 int MAXLENGTHADDRESS = -1;
 int NTHREADS = 1;
 
+bool FLAG_AUTO_PROFILE = false;
+std::string AUTO_PROFILE_MODE = "balanced";
+bool OVERRIDE_THREADS = false;
+bool OVERRIDE_K = false;
+bool OVERRIDE_N = false;
+uint64_t bsgs_m = 4194304;
+
+struct BsgsAutoConfig {
+    int threads;
+    uint64_t k;
+    uint64_t n;
+    double ram_gb;
+    const char* profile_name;
+};
+
+BsgsAutoConfig compute_bsgs_auto_config(const HardwareProfile& hw, const std::string& profile_mode) {
+    BsgsAutoConfig cfg{};
+    cfg.profile_name = profile_mode.c_str();
+
+    double safe_ram = compute_safe_ram_gb(hw, profile_mode.c_str());
+    cfg.ram_gb = safe_ram;
+
+    double bytes_per_entry = 40.0;
+    uint64_t max_entries = static_cast<uint64_t>((safe_ram * 1073741824.0) / bytes_per_entry);
+
+    int threads;
+    uint64_t n;
+    uint64_t k;
+
+    bool is_low_end = hw.logical_threads <= 4 || hw.total_ram_gb < 8.0;
+    bool is_high_end = hw.logical_threads >= 16 && hw.total_ram_gb >= 32.0;
+
+    if (equals_ignore_case(profile_mode.c_str(), "safe")) {
+        threads = std::max(1, hw.logical_threads / 2);
+        if (is_low_end) {
+            n = 1048576;
+            k = 32;
+        } else if (is_high_end) {
+            n = 8388608;
+            k = 24;
+        } else {
+            n = 4194304;
+            k = 32;
+        }
+    } else if (equals_ignore_case(profile_mode.c_str(), "max")) {
+        threads = std::max(1, hw.logical_threads);
+        if (hw.total_ram_gb >= 64.0) {
+            n = max_entries > 134217728 ? 134217728 : max_entries / 2;
+        } else if (hw.total_ram_gb >= 32.0) {
+            n = max_entries > 67108864 ? 67108864 : max_entries / 2;
+        } else if (hw.total_ram_gb >= 16.0) {
+            n = max_entries > 33554432 ? 33554432 : max_entries / 2;
+        } else {
+            n = max_entries > 16777216 ? 16777216 : max_entries / 2;
+        }
+        k = 16;
+    } else {
+        threads = hw.logical_threads > 4 ? hw.logical_threads - 1 : hw.logical_threads;
+        if (hw.total_ram_gb >= 64.0) {
+            n = max_entries > 67108864 ? 67108864 : max_entries / 3;
+        } else if (hw.total_ram_gb >= 32.0) {
+            n = max_entries > 33554432 ? 33554432 : max_entries / 3;
+        } else if (hw.total_ram_gb >= 16.0) {
+            n = max_entries > 16777216 ? 16777216 : max_entries / 3;
+        } else {
+            n = max_entries > 8388608 ? 8388608 : max_entries / 3;
+        }
+        k = 24;
+    }
+
+    cfg.threads = std::max(1, std::min(threads, 256));
+    uint64_t max_n = max_entries > 0 ? max_entries : static_cast<uint64_t>(1048576);
+    cfg.n = std::max(static_cast<uint64_t>(1048576), std::min(n, max_n));
+    cfg.k = std::max(static_cast<uint64_t>(1), std::min(k, static_cast<uint64_t>(64)));
+
+    return cfg;
+}
+
+void apply_bsgs_auto_profile_if_needed() {
+    if (!FLAG_AUTO_PROFILE) {
+        return;
+    }
+    HardwareProfile hw = detect_hardware_profile();
+    BsgsAutoConfig cfg = compute_bsgs_auto_config(hw, AUTO_PROFILE_MODE);
+
+    if (!OVERRIDE_THREADS) {
+        NTHREADS = cfg.threads;
+    }
+    if (!OVERRIDE_K) {
+        KFACTOR = static_cast<int>(cfg.k);
+    }
+    if (!OVERRIDE_N) {
+        bsgs_m = cfg.n;
+    }
+
+    print_hardware_info(hw);
+    printf("[i] Auto profile (%s): -t %d -k %lu -n %lu -m %.1f\n",
+           AUTO_PROFILE_MODE.c_str(),
+           cfg.threads,
+           (unsigned long)cfg.k,
+           (unsigned long)cfg.n,
+           cfg.ram_gb);
+    if (OVERRIDE_THREADS || OVERRIDE_K || OVERRIDE_N) {
+        printf("[i] Overrides manuais preservados para flags explicitas.\n");
+    }
+}
+
 int FLAGSAVEREADFILE = 0;
 int FLAGREADEDFILE1 = 0;
 int FLAGREADEDFILE2 = 0;
@@ -349,7 +457,6 @@ pthread_mutex_t *cuckoo_bPx3rd_mutex;
 uint64_t cuckoo_bP_totalbytes = 0;
 uint64_t cuckoo_bP2_totalbytes = 0;
 uint64_t cuckoo_bP3_totalbytes = 0;
-uint64_t bsgs_m = 4194304;
 uint64_t bsgs_m2;
 uint64_t bsgs_m3;
 uint64_t bsgs_aux;
@@ -448,19 +555,7 @@ static inline uint32_t thread_rng_next_bounded(uint64_t *state, uint32_t bound) 
     return bound > 0 ? (uint32_t)(*state % bound) : 0;
 }
 
-static inline bool equals_ignore_case(const char *a, const char *b) {
-    if (a == NULL || b == NULL) {
-        return false;
-    }
-    while (*a && *b) {
-        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) {
-            return false;
-        }
-        ++a;
-        ++b;
-    }
-    return *a == '\0' && *b == '\0';
-}
+
 
 static inline bool env_truthy(const char *value) {
     if (value == NULL) {
@@ -659,8 +754,18 @@ int main(int argc, char **argv)	{
 	
 	
 
-	while ((c = getopt(argc, argv, "deh6MqRSB:b:c:C:E:f:I:k:l:m:N:n:p:r:s:t:v:G:8:z:")) != -1) {
+	while ((c = getopt(argc, argv, "deh6MqRSB:b:c:C:E:f:I:k:l:m:N:n:p:r:s:t:v:G:8:z:A")) != -1) {
 		switch(c) {
+			case 'A':
+				FLAG_AUTO_PROFILE = true;
+				if (optarg) {
+					if (equals_ignore_case(optarg, "safe") || equals_ignore_case(optarg, "balanced") || 
+						equals_ignore_case(optarg, "max") || equals_ignore_case(optarg, "benchmark")) {
+						AUTO_PROFILE_MODE = optarg;
+					}
+				}
+				printf("[+] Auto profile enabled: %s\n", AUTO_PROFILE_MODE.c_str());
+			break;
 			case 'h':
 				menu();
 			break;
@@ -765,13 +870,14 @@ int main(int argc, char **argv)	{
 				FLAGSTRIDE = 1;
 				str_stride = optarg;
 			break;
-			case 'k':
-				KFACTOR = (int)strtol(optarg,NULL,10);
-				if(KFACTOR <= 0)	{
-					KFACTOR = 1;
-				}
-				printf("[+] K factor %i\n",KFACTOR);
-			break;
+		case 'k':
+			OVERRIDE_K = true;
+			KFACTOR = (int)strtol(optarg,NULL,10);
+			if(KFACTOR <= 0)	{
+				KFACTOR = 1;
+			}
+			printf("[+] K factor %i\n",KFACTOR);
+		break;
 
 			case 'l':
 				switch(indexOf(optarg,publicsearch,3)) {
@@ -835,10 +941,11 @@ int main(int argc, char **argv)	{
 					break;
 				}
 			break;
-			case 'n':
-				FLAG_N = 1;
-				str_N = optarg;
-			break;
+		case 'n':
+			OVERRIDE_N = true;
+			FLAG_N = 1;
+			str_N = optarg;
+		break;
 			case 'q':
 				FLAGQUIET	= 1;
 				printf("[+] Quiet thread output\n");
@@ -900,13 +1007,14 @@ int main(int argc, char **argv)	{
 			case 'S':
 				FLAGSAVEREADFILE = 1;
 			break;
-			case 't':
-				NTHREADS = strtol(optarg,NULL,10);
-				if(NTHREADS <= 0)	{
-					NTHREADS = 1;
-				}
-				printf((NTHREADS > 1) ? "[+] Threads : %u\n": "[+] Thread : %u\n",NTHREADS);
-			break;
+		case 't':
+			OVERRIDE_THREADS = true;
+			NTHREADS = strtol(optarg,NULL,10);
+			if(NTHREADS <= 0)	{
+				NTHREADS = 1;
+			}
+			printf((NTHREADS > 1) ? "[+] Threads : %u\n": "[+] Thread : %u\n",NTHREADS);
+		break;
 			case 'v':
 				FLAGVANITY = 1;
 				if(vanity_cuckoo == NULL){
@@ -974,6 +1082,7 @@ int main(int argc, char **argv)	{
 		stride.Set(&ONE);
 	}
 	init_generator();
+	apply_bsgs_auto_profile_if_needed();
 	if(FLAGMODE == MODE_BSGS )	{
 		printf("[+] Mode BSGS %s\n",bsgs_modes[FLAGBSGSMODE]);
 	}

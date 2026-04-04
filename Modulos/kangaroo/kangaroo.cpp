@@ -284,25 +284,56 @@ KangarooAutoConfig compute_kangaroo_auto_config(const HardwareProfile& hw, const
     KangarooAutoConfig cfg{};
     cfg.profile_name = profile_mode.c_str();
 
+    bool is_low_end = hw.logical_threads <= 4 || hw.total_ram_gb < 8.0;
+    bool is_high_end = hw.logical_threads >= 16 && hw.total_ram_gb >= 32.0;
+
+    int threads;
+    int jumps;
+    int wild;
+
     if (equals_ignore_case(profile_mode.c_str(), "safe")) {
-        cfg.threads = std::max(1, hw.logical_threads / 2);
-        cfg.jumps = 32;
-        cfg.wild = 24;
+        threads = std::max(1, hw.logical_threads / 2);
+        if (is_low_end) {
+            jumps = 16;
+            wild = 8;
+        } else if (is_high_end) {
+            jumps = 48;
+            wild = 32;
+        } else {
+            jumps = 32;
+            wild = 24;
+        }
     } else if (equals_ignore_case(profile_mode.c_str(), "max")) {
-        cfg.threads = std::max(1, hw.logical_threads);
-        cfg.jumps = 64;
-        cfg.wild = 40;
+        threads = std::max(1, hw.logical_threads);
+        if (hw.total_ram_gb >= 64.0) {
+            jumps = 96;
+            wild = 64;
+        } else if (hw.total_ram_gb >= 32.0) {
+            jumps = 64;
+            wild = 48;
+        } else {
+            jumps = 64;
+            wild = 40;
+        }
     } else {
-        cfg.threads = hw.logical_threads > 4 ? hw.logical_threads - 1 : hw.logical_threads;
-        cfg.jumps = 48;
-        cfg.wild = 32;
+        threads = hw.logical_threads > 4 ? hw.logical_threads - 1 : hw.logical_threads;
+        if (is_low_end) {
+            jumps = 24;
+            wild = 12;
+        } else if (is_high_end) {
+            jumps = 64;
+            wild = 48;
+        } else {
+            jumps = 48;
+            wild = 32;
+        }
     }
 
-    cfg.threads = std::max(1, std::min(cfg.threads, 256));
+    cfg.threads = std::max(1, std::min(threads, 256));
     cfg.ram_gb = compute_safe_ram_gb(hw, profile_mode.c_str());
     cfg.ram_gb = std::max(0.5, std::floor(cfg.ram_gb * 2.0) / 2.0);
-    cfg.jumps = std::max(1, std::min(cfg.jumps, JUMP_COUNT));
-    cfg.wild = std::max(0, std::min(cfg.wild, FLEET_SIZE));
+    cfg.jumps = std::max(1, std::min(jumps, JUMP_COUNT));
+    cfg.wild = std::max(0, std::min(wild, FLEET_SIZE));
 
     if (cfg.ram_gb >= 24.0) {
         cfg.dp_bits = 23;
@@ -1643,12 +1674,15 @@ int main(int argc, char** argv) {
         {"help", no_argument, nullptr, 'h'},
         {nullptr, 0, nullptr, 0}
     };
-    while ((c = getopt_long(argc, argv, "hr:p:t:d:m:b:j:w:", long_options, nullptr)) != -1) {
+        while ((c = getopt_long(argc, argv, "hr:p:t:d:m:b:j:w:", long_options, nullptr)) != -1) {
         switch (c) {
             case 1000:
                 FLAG_AUTO_PROFILE = true;
                 if (optarg != nullptr && *optarg != '\0') {
-                    AUTO_PROFILE_MODE = optarg;
+                    if (equals_ignore_case(optarg, "safe") || equals_ignore_case(optarg, "balanced") || 
+                        equals_ignore_case(optarg, "max") || equals_ignore_case(optarg, "benchmark")) {
+                        AUTO_PROFILE_MODE = optarg;
+                    }
                 } else {
                     AUTO_PROFILE_MODE = "balanced";
                 }

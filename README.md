@@ -44,10 +44,15 @@ O motor de busca por endereços clássico, agora refatorado para performance ext
 - **Checkpoint Revisado:** O formato atual salva cursor, `range_end` e modo randômico com compatibilidade legada.
 - **Correções Estruturais:** Remoção de UB em vetores BSGS internos, correções de concorrência em `steps/ends` e cleanup de workers.
 - **Hot Path BTC Melhorado:** Caminho comum `BTC + !endomorphism` foi simplificado para reduzir branches por batch.
+- **RNG por Thread:** Randômico agora usa estado independente por thread (`thread_rand()`) para melhor reprodução e performance.
+- **Auto-Tuning V1**: Suporta `--auto`, `--auto=safe`, `--auto=balanced`, `--auto=max` e `--auto=benchmark`, detectando threads, RAM e WSL para sugerir `-t`.
 - **Uso ideal:** Quando você tem uma lista de endereços Bitcoin (1...) e quer testar grandes intervalos sequenciais ou randômicos.
 - **Exemplo (Puzzle 21):**
   ```bash
   ./Address/modo-address -f Puzzles/21.txt -b 21 -l compress -t 8 -s 10
+  ```
+  ```bash
+  ./Address/modo-address --auto=balanced -f Puzzles/21.txt -b 21
   ```
 
 ### 👶 2. BSGS Engine (`modo-bsgs`)
@@ -55,10 +60,14 @@ Implementação do algoritmo *Baby-step Giant-step*.
 - **Checkpoint Revisado:** O formato atual salva range e progresso global do BSGS com compatibilidade para checkpoint legado.
 - **Validação Final Endurecida:** A confirmação final passou a comparar o ponto completo, não apenas `x`.
 - **Workers Mais Seguros:** Melhorias de concorrência em `steps/ends`, `bsgs_found` com visibilidade mais consistente e RNG local por thread nos modos randômicos.
+- **Auto-Tuning V1**: Suporta `--auto`, `--auto=safe`, `--auto=balanced` e `--auto=max`, detectando threads, RAM e WSL para sugerir `-t`, `-k` e `-n`.
 - **Uso ideal:** Encontrar chaves em intervalos conhecidos com velocidade astronômica. Requer RAM.
 - **Exemplo (Puzzle 66):**
   ```bash
   ./BSGS/modo-bsgs -f Puzzles/66.txt -b 66 -t 8 -s 10
+  ```
+  ```bash
+  ./BSGS/modo-bsgs --auto=balanced -f Puzzles/66.txt -b 66
   ```
 
 ### 🦘 3. Kangaroo Engine (`modo-kangaroo`)
@@ -137,40 +146,48 @@ Aqui estão os detalhes técnicos dos comandos mais utilizados:
 | **`-s`** | **Stats Interval**: Frequência de atualização (em segundos). | `-s 10` (Atualiza a cada 10s) |
 | **`-j`** | **Active Jumps**: Número de saltos ativos do Kangaroo. | `-j 48` |
 | **`-w`** | **Active Wild**: Número de kangaroos `wild` na frota do Kangaroo. | `-w 40` |
-| **`--auto`** | **Auto Profile**: Aplica tuning automático por hardware no Kangaroo. | `--auto=balanced` |
+| **`--auto`** | **Auto Profile**: Aplica tuning automático por hardware. Suporta `safe`, `balanced`, `max` e `benchmark`. | `--auto=balanced` |
 
-### 🛠️ Configurando Performance e Memória
+### 🛠️ Auto-Tuning (--auto)
+
+Todos os motores agora suportam **auto-detecção de hardware** com profiles ajustáveis:
+
+```bash
+--auto           # Usa perfil 'balanced' por padrão
+--auto=safe      # Parâmetros conservadores (metade dos recursos)
+--auto=balanced # Equilíbrio entre performance e recursos
+--auto=max       # Usa todos os recursos disponíveis
+--auto=benchmark # Testa múltiplas combinações e salva o melhor perfil em ~/.qchaves_profile.json
+```
+
+#### Motores Suportados
+
+| Motor | Parâmetros Automáticos |
+| :--- | :--- |
+| **Address** | `-t` (threads) |
+| **BSGS** | `-t` (threads), `-k` (k-factor), `-n` (tamanho da tabela) |
+| **Kangaroo** | `-t` (threads), `-d` (dp_bits), `-m` (memória), `-j` (jumps), `-w` (wild) |
+
+O que é detectado automaticamente:
+- **threads lógicas**: Número de CPUs/threads disponíveis
+- **RAM total**: Memória total do sistema
+- **RAM disponível**: Memória livre no momento
+- **Ambiente WSL**: Ajuste automático para ambiente Windows/WSL
+- **Perfil de hardware**: Baixa/média/alta performance
+
+Os valores escolhidos automaticamente podem ser sobrescritos manualmente. Overrides sempre vencem:
+```bash
+# Usa profile 'max' mas força 8 threads
+./BSGS/modo-bsgs --auto=max -t 8 -f Puzzles/66.txt -b 66
+```
+
+### ⚙️ Configurando Performance e Memória
 
 O desempenho dos motores depende diretamente da configuração dos parâmetros `-t` e `-k`.
 
-#### 1. Parâmetro `-t` (Threads)
+#### Parâmetro `-t` (Threads)
 Defina `-t` conforme o número de threads do seu processador. Para saber quantos núcleos você tem, use `nproc` no WSL.
 - Exemplo: Se você tem um processador com 16 threads, use `-t 16`.
-
-#### 1.1 Auto-Tuning inicial do Kangaroo
-O `modo-kangaroo` já suporta uma V1 de autodetecção de hardware:
-- `--auto`
-- `--auto=safe`
-- `--auto=balanced`
-- `--auto=max`
-
-O motor detecta:
-- threads lógicas;
-- RAM total;
-- RAM disponível;
-- ambiente WSL.
-
-Os valores escolhidos automaticamente podem preencher:
-- `-t`
-- `-d`
-- `-m`
-- `-j`
-- `-w`
-
-Overrides manuais sempre vencem. Exemplo:
-```bash
-./kangaroo/modo-kangaroo --auto=max -t 8 -p <PUBKEY_HEX> -r <START:END>
-```
 
 #### 2. Parâmetro `-k` (Memory Factor) e `-n` (N-Sequential)
 

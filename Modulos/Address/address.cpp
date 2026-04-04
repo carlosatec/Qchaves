@@ -21,6 +21,7 @@
 
 #include "hash/sha256.h"
 #include "hash/ripemd160.h"
+#include "../../libs/hardware_profile.h"
 
 #if defined(_WIN64) && !defined(__CYGWIN__)
 #include "getopt.h"
@@ -74,7 +75,13 @@ struct tothread {
 	int nt;     //Number thread
 	char *rs;   //range start
 	char *rpt;  //rng per thread
+	uint32_t rng_state;  // RNG state per thread
 };
+
+static inline uint32_t thread_rand(uint32_t* state) {
+	*state = (*state * 1103515245 + 12345) & 0x7fffffff;
+	return *state;
+}
 
 struct bPload	{
 	uint32_t threadid;
@@ -281,6 +288,67 @@ int KFACTOR = 1;
 int MAXLENGTHADDRESS = -1;
 int NTHREADS = 1;
 
+bool FLAG_AUTO_PROFILE = false;
+std::string AUTO_PROFILE_MODE = "balanced";
+bool OVERRIDE_THREADS = false;
+
+struct AddressAutoConfig {
+    int threads;
+    double ram_gb;
+    const char* profile_name;
+};
+
+struct AddressAutoConfig compute_address_auto_config(const HardwareProfile& hw, const std::string& profile_mode) {
+    AddressAutoConfig cfg{};
+    cfg.profile_name = profile_mode.c_str();
+
+    double safe_ram = compute_safe_ram_gb(hw, profile_mode.c_str());
+    cfg.ram_gb = safe_ram;
+
+    bool is_low_end = hw.logical_threads <= 4 || hw.total_ram_gb < 8.0;
+    bool is_high_end = hw.logical_threads >= 16 && hw.total_ram_gb >= 32.0;
+
+    int threads;
+
+    if (equals_ignore_case(profile_mode.c_str(), "safe")) {
+        threads = std::max(1, hw.logical_threads / 2);
+    } else if (equals_ignore_case(profile_mode.c_str(), "max")) {
+        threads = std::max(1, hw.logical_threads);
+    } else {
+        threads = hw.logical_threads > 4 ? hw.logical_threads - 1 : hw.logical_threads;
+    }
+
+    if (is_low_end) {
+        threads = std::max(1, threads / 2);
+    } else if (is_high_end && equals_ignore_case(profile_mode.c_str(), "max")) {
+        threads = std::min(threads + 2, hw.logical_threads);
+    }
+
+    cfg.threads = std::max(1, std::min(threads, 256));
+    return cfg;
+}
+
+void apply_address_auto_profile_if_needed() {
+    if (!FLAG_AUTO_PROFILE) {
+        return;
+    }
+    HardwareProfile hw = detect_hardware_profile();
+    AddressAutoConfig cfg = compute_address_auto_config(hw, AUTO_PROFILE_MODE);
+
+    if (!OVERRIDE_THREADS) {
+        NTHREADS = cfg.threads;
+    }
+
+    print_hardware_info(hw);
+    printf("[i] Auto profile (%s): -t %d -m %.1f\n",
+           AUTO_PROFILE_MODE.c_str(),
+           cfg.threads,
+           cfg.ram_gb);
+    if (OVERRIDE_THREADS) {
+        printf("[i] Overrides manuais preservados para flags explicitas.\n");
+    }
+}
+
 int FLAGSAVEREADFILE = 0;
 int FLAGREADEDFILE1 = 0;
 int FLAGREADEDFILE2 = 0;
@@ -421,19 +489,7 @@ static inline void ends_store_release(int index, unsigned int value) {
     __atomic_store_n(&ends[index], value, __ATOMIC_RELEASE);
 }
 
-static inline bool equals_ignore_case(const char *a, const char *b) {
-    if (a == NULL || b == NULL) {
-        return false;
-    }
-    while (*a && *b) {
-        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) {
-            return false;
-        }
-        ++a;
-        ++b;
-    }
-    return *a == '\0' && *b == '\0';
-}
+
 
 static inline bool env_truthy(const char *value) {
     if (value == NULL) {
@@ -645,8 +701,18 @@ int main(int argc, char **argv)	{
 	
 	
 
-	while ((c = getopt(argc, argv, "deh6MqRSB:b:c:C:E:f:I:k:l:m:N:n:p:r:s:t:v:G:8:z:")) != -1) {
+	while ((c = getopt(argc, argv, "deh6MqRSB:b:c:C:E:f:I:k:l:m:N:n:p:r:s:t:v:G:8:z:A")) != -1) {
 		switch(c) {
+			case 'A':
+				FLAG_AUTO_PROFILE = true;
+				if (optarg) {
+					if (equals_ignore_case(optarg, "safe") || equals_ignore_case(optarg, "balanced") || 
+						equals_ignore_case(optarg, "max") || equals_ignore_case(optarg, "benchmark")) {
+						AUTO_PROFILE_MODE = optarg;
+					}
+				}
+				printf("[+] Auto profile enabled: %s\n", AUTO_PROFILE_MODE.c_str());
+			break;
 			case 'h':
 				menu();
 			break;
@@ -886,13 +952,14 @@ int main(int argc, char **argv)	{
 			case 'S':
 				FLAGSAVEREADFILE = 1;
 			break;
-			case 't':
-				NTHREADS = strtol(optarg,NULL,10);
-				if(NTHREADS <= 0)	{
-					NTHREADS = 1;
-				}
-				printf((NTHREADS > 1) ? "[+] Threads : %u\n": "[+] Thread : %u\n",NTHREADS);
-			break;
+		case 't':
+			OVERRIDE_THREADS = true;
+			NTHREADS = strtol(optarg,NULL,10);
+			if(NTHREADS <= 0)	{
+				NTHREADS = 1;
+			}
+			printf((NTHREADS > 1) ? "[+] Threads : %u\n": "[+] Thread : %u\n",NTHREADS);
+		break;
 			case 'v':
 				FLAGVANITY = 1;
 				if(vanity_cuckoo == NULL){
@@ -960,6 +1027,7 @@ int main(int argc, char **argv)	{
 		stride.Set(&ONE);
 	}
 	init_generator();
+	apply_address_auto_profile_if_needed();
 	if(FLAGMODE == MODE_BSGS )	{
 		printf("[+] Mode BSGS %s\n",bsgs_modes[FLAGBSGSMODE]);
 	}
@@ -2152,6 +2220,7 @@ int main(int argc, char **argv)	{
 			tt = (tothread*) malloc(sizeof(struct tothread));
 			checkpointer((void *)tt,__FILE__,"malloc","tt" ,__LINE__ -1 );
 			tt->nt = j;
+			tt->rng_state = (uint32_t)(clock() + time(NULL) + j * 12345);
 			steps[j] = 0;
 			s = 0;
 			switch(FLAGBSGSMODE)	{
@@ -2216,6 +2285,7 @@ int main(int argc, char **argv)	{
 			tt = (tothread*) malloc(sizeof(struct tothread));
 			checkpointer((void *)tt,__FILE__,"malloc","tt" ,__LINE__ -1 );
 			tt->nt = j;
+			tt->rng_state = (uint32_t)(clock() + time(NULL) + j * 12345);
 			steps[j] = 0;
 			s = 0;
 			switch(FLAGMODE)	{
@@ -4981,6 +5051,7 @@ void *thread_process_bsgs_dance(void *vargp)	{
 	
 	tt = (struct tothread *)vargp;
 	thread_number = tt->nt;
+	uint32_t rng_state = tt->rng_state;
 	free(tt);
 	
 	cycles = bsgs_aux / 1024;
@@ -4999,7 +5070,7 @@ void *thread_process_bsgs_dance(void *vargp)	{
 		while base_key is less than n_range_end then:
 	*/
 	do	{
-		r = rand() % 3;
+		r = thread_rand(&rng_state) % 3;
 #if defined(_WIN64) && !defined(__CYGWIN__)
 	WaitForSingleObject(bsgs_thread, INFINITE);
 #else
@@ -5529,6 +5600,7 @@ void *thread_process_bsgs_both(void *vargp)	{
 	
 	tt = (struct tothread *)vargp;
 	thread_number = tt->nt;
+	uint32_t rng_state = tt->rng_state;
 	free(tt);
 	
 	cycles = bsgs_aux / 1024;
@@ -5547,7 +5619,7 @@ void *thread_process_bsgs_both(void *vargp)	{
 	*/
 	do	{
 
-		r = rand() % 2;
+		r = thread_rand(&rng_state) % 2;
 #if defined(_WIN64) && !defined(__CYGWIN__)
 		WaitForSingleObject(bsgs_thread, INFINITE);
 #else
