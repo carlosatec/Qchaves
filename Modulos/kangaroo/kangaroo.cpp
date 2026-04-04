@@ -1756,9 +1756,17 @@ int main(int argc, char** argv) {
                 menu();
                 break;
             case 'b':
+                if (optarg == nullptr) {
+                    fprintf(stderr, "[E] -b requires an argument\n");
+                    return 1;
+                }
                 FLAG_BITRANGE = atoi(optarg);
                 break;
             case 'r': {
+                if (optarg == nullptr) {
+                    fprintf(stderr, "[E] -r requires an argument\n");
+                    return 1;
+                }
                 Tokenizer t;
                 stringtokenizer(optarg, &t);
                 if (t.n >= 1) {
@@ -1771,13 +1779,25 @@ int main(int argc, char** argv) {
                 break;
             }
             case 'p':
+                if (optarg == nullptr) {
+                    fprintf(stderr, "[E] -p requires an argument\n");
+                    return 1;
+                }
                 TARGET_PUBKEY_HEX = optarg;
                 break;
             case 't':
+                if (optarg == nullptr) {
+                    fprintf(stderr, "[E] -t requires an argument\n");
+                    return 1;
+                }
                 N_THREADS = std::max(1, atoi(optarg));
                 OVERRIDE_THREADS = true;
                 break;
             case 'd': {
+                if (optarg == nullptr) {
+                    fprintf(stderr, "[E] -d requires an argument\n");
+                    return 1;
+                }
                 int bits = atoi(optarg);
                 if (bits > 64) {
                     bits = 64;
@@ -1793,14 +1813,26 @@ int main(int argc, char** argv) {
                 break;
             }
             case 'm':
+                if (optarg == nullptr) {
+                    fprintf(stderr, "[E] -m requires an argument\n");
+                    return 1;
+                }
                 MAX_RAM_GB = std::max(0.1, atof(optarg));
                 OVERRIDE_RAM = true;
                 break;
             case 'j':
+                if (optarg == nullptr) {
+                    fprintf(stderr, "[E] -j requires an argument\n");
+                    return 1;
+                }
                 ACTIVE_JUMP_COUNT = std::max(1, std::min(atoi(optarg), JUMP_COUNT));
                 OVERRIDE_JUMPS = true;
                 break;
             case 'w':
+                if (optarg == nullptr) {
+                    fprintf(stderr, "[E] -w requires an argument\n");
+                    return 1;
+                }
                 ACTIVE_WILD_COUNT = std::max(0, std::min(atoi(optarg), FLEET_SIZE));
                 OVERRIDE_WILD = true;
                 break;

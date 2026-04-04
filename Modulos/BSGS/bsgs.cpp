@@ -614,6 +614,42 @@ void signal_handler(int sig) {
     }
 }
 
+void cleanup_bsgs() {
+    if (str_baseminikey != NULL) {
+        free(str_baseminikey);
+        str_baseminikey = NULL;
+    }
+    if (raw_baseminikey != NULL) {
+        free(raw_baseminikey);
+        raw_baseminikey = NULL;
+    }
+    if (minikeyN != NULL) {
+        free(minikeyN);
+        minikeyN = NULL;
+    }
+    if (cuckoo.bf != NULL) {
+        free(cuckoo.bf);
+        cuckoo.bf = NULL;
+    }
+    if (addressTable != NULL) {
+        free(addressTable);
+        addressTable = NULL;
+    }
+    if (bPtable != NULL) {
+        free(bPtable);
+        bPtable = NULL;
+    }
+    #if defined(_WIN64) && !defined(__CYGWIN__)
+    if (write_keys != NULL) CloseHandle(write_keys);
+    if (write_random != NULL) CloseHandle(write_random);
+    if (bsgs_thread != NULL) CloseHandle(bsgs_thread);
+    #else
+    pthread_mutex_destroy(&write_keys);
+    pthread_mutex_destroy(&write_random);
+    pthread_mutex_destroy(&bsgs_thread);
+    #endif
+}
+
 void save_checkpoint_bsgs(int bits) {
     char filename[256];
     sprintf(filename, "bsgs_bit%d.ckp", bits);
@@ -709,6 +745,7 @@ bool load_checkpoint_bsgs(int bits) {
 
 int main(int argc, char **argv)	{
     signal(SIGINT, signal_handler);
+    atexit(cleanup_bsgs);
 	char buffer[2048];
 	char rawvalue[32];
 	struct tothread *tt;	//tothread
@@ -811,6 +848,10 @@ int main(int argc, char **argv)	{
 				}
 			break;
 			case 'b':
+				if(optarg == NULL) {
+					fprintf(stderr,"[E] -b requires an argument\n");
+					exit(EXIT_FAILURE);
+				}
 				bitrange = strtol(optarg,NULL,10);
 				if(bitrange > 0 && bitrange <=256 )	{
 					MPZAUX.Set(&ONE);
@@ -899,6 +940,10 @@ int main(int argc, char **argv)	{
 			break;
 		case 'k':
 			OVERRIDE_K = true;
+			if(optarg == NULL) {
+				fprintf(stderr,"[E] -k requires an argument\n");
+				exit(EXIT_FAILURE);
+			}
 			KFACTOR = (int)strtol(optarg,NULL,10);
 			if(KFACTOR <= 0)	{
 				KFACTOR = 1;
@@ -1009,6 +1054,10 @@ int main(int argc, char **argv)	{
 			break;
 		case 't':
 			OVERRIDE_THREADS = true;
+			if(optarg == NULL) {
+				fprintf(stderr,"[E] -t requires an argument\n");
+				exit(EXIT_FAILURE);
+			}
 			NTHREADS = strtol(optarg,NULL,10);
 			if(NTHREADS <= 0)	{
 				NTHREADS = 1;
@@ -1045,6 +1094,10 @@ int main(int argc, char **argv)	{
 				}
 			break;
 			case 'z':
+				if(optarg == NULL) {
+					fprintf(stderr,"[E] -z requires an argument\n");
+					exit(EXIT_FAILURE);
+				}
 				FLAGCUCKOOMULTIPLIER= strtol(optarg,NULL,10);
 				if(FLAGCUCKOOMULTIPLIER <= 0)	{
 					FLAGCUCKOOMULTIPLIER = 1;
@@ -1148,6 +1201,10 @@ int main(int argc, char **argv)	{
 	
 	if(FLAGMODE != MODE_BSGS )	{
 		if(FLAG_N){
+			if(str_N == NULL) {
+				fprintf(stderr,"[E] N parameter is NULL\n");
+				exit(EXIT_FAILURE);
+			}
 			if(str_N[0] == '0' && str_N[1] == 'x')	{
 				N_SEQUENTIAL_MAX =strtol(str_N,NULL,16);
 			}
@@ -1292,6 +1349,10 @@ int main(int argc, char **argv)	{
 			/* Here we need to validate if the given string is a valid hexadecimal number or a base 10 number*/
 			
 			/* Now the conversion*/
+			if(str_N == NULL) {
+				fprintf(stderr,"[E] N parameter is NULL\n");
+				exit(EXIT_FAILURE);
+			}
 			if(str_N[0] == '0' && str_N[1] == 'x' )	{	/*We expected a hexadecimal value after 0x  -> str_N +2 */
 				BSGS_N.SetBase16((char*)(str_N+2));
 			}
