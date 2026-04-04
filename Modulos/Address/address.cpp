@@ -2716,12 +2716,56 @@ void *thread_process(void *vargp)	{
 	Int key_mpz,keyfound,temp_stride;
 	tt = (struct tothread *)vargp;
 	thread_number = tt->nt;
+	uint32_t rng_state = tt->rng_state;  // RNG state por thread
+	Int range_block_start, range_block_end;
+	uint64_t block_counter = 0;
+	uint64_t BLOCK_SIZE = 1048576;  // 1M chaves por block
 	free(tt);
 	grp->Set(dx);
 			
 	do {
 		if(FLAGRANDOM){
-			key_mpz.Rand(&n_range_start,&n_range_end);
+			// Sistema de blocks para ranges pequenos (evita overhead)
+			// Para ranges grandes, usa método original com RNG por thread
+			
+			bool use_block = false;
+			uint64_t range_size = 0;
+			
+			// Verificar se range_size cabe em uint64_t (range < 2^64)
+			Int limit;
+			limit.SetInt64(0xFFFFFFFFFFFFFFFFULL);  // max uint64
+			
+			if(n_range_diff.IsLowerOrEqual(&limit)) {
+				range_size = n_range_diff.GetInt64();
+				if(range_size > BLOCK_SIZE) {
+					use_block = true;
+				}
+			}
+			
+			if(use_block && block_counter == 0) {
+				// Sortear novo block
+				uint64_t max_blocks = range_size / BLOCK_SIZE;
+				uint64_t block_start = thread_rand(&rng_state) % max_blocks;
+				
+				range_block_start.Set(&n_range_start);
+				range_block_start.Add(block_start * BLOCK_SIZE);
+				
+				range_block_end.Set(&range_block_start);
+				range_block_end.Add(BLOCK_SIZE);
+				
+				if(range_block_end.IsGreater(&n_range_end)) {
+					range_block_end.Set(&n_range_end);
+				}
+				block_counter = BLOCK_SIZE;
+			}
+			
+			if(use_block) {
+				key_mpz.Rand(&range_block_start, &range_block_end);
+				block_counter--;
+			} else {
+				// Range muito grande ou block esgotado: usar método original
+				key_mpz.Rand(&n_range_start,&n_range_end);
+			}
 		}
 		else	{
 			if(!claim_sequential_range_start(&key_mpz)) {

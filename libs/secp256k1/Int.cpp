@@ -723,12 +723,26 @@ void Int::Rand(Int *min,Int *max) {
 	CLEAR();
   Int diff;
   int nbit = 256;
-  uint32_t nb = nbit/32;
+  
+  // Calcular nbit baseado no tamanho do range para melhor performance
   diff.Set(max);
   diff.Sub(min);
-	uint32_t i=0;
-	for(;i<nb;i++)
-		bits[i]=rndl();
+  int range_bits = diff.GetBitLength();
+  if (range_bits > 0 && range_bits < 256) {
+    nbit = range_bits + 1;  // Um bit extra para garantir全覆盖
+  }
+  
+  uint32_t nb = nbit/32;
+  uint32_t i=0;
+  for(;i<nb;i++)
+    bits[i]=rndl();
+  
+  // Aplicar mask no último bloco se necessário
+  if (nbit % 32 != 0) {
+    uint32_t mask = (1 << (nbit % 32)) - 1;
+    bits[i] = rndl() & mask;
+  }
+  
   this->Mod(&diff);
   this->Add(min);
 }
