@@ -1,0 +1,117 @@
+Plano em etapas para bsgs.cpp
+
+Arquivo analisado:
+- D:\Workspace\Qchaves\Modulos\BSGS\bsgs.cpp
+
+Resumo executivo
+- `bsgs.cpp` tem os mesmos problemas estruturais de `address.cpp`, mas com riscos adicionais de corretude no estado do range e no criterio final de validacao.
+- O maior potencial de ganho esta no hot path do BSGS, na reducao de recomputacao de pontos e na estabilizacao da coordenacao entre threads.
+
+Status atual
+- Ja corrigidos nesta primeira rodada:
+  - checkpoint basico agora salva `BSGS_CURRENT`, range e modo BSGS ativo;
+  - `steps[]` e `ends[]` ja nao sao lidos de forma solta na thread principal;
+  - parte principal dos workers BSGS ja usa `bsgs_found` com visibilidade consistente entre threads;
+  - validacao final de `bsgs_thirdcheck()` foi endurecida para ponto completo;
+  - UB de `std::vector` com `reserve()` seguido de escrita por indice foi corrigido;
+  - `bsgs_searchbinary()` foi reescrita de forma robusta;
+  - vazamentos principais de `IntGroup` nos workers long-lived atacados.
+  - `rand()` global foi removido dos modos randômicos principais e substituido por RNG local por thread (`thread_rng_next_bounded()`);
+  - `bsgs_secondcheck()` e `bsgs_thirdcheck()` receberam uma primeira limpeza para reduzir redundancia.
+  - Checkpoint agora salva `BSGS_CURRENT` + range (linha ~589)
+  - `bsgs_found` usa atomics com `bsgs_found_load_relaxed` e `bsgs_found_store_release` (linhas 529-534)
+
+Achados principais
+1. Checkpoint nao representa o estado real do BSGS (JÁ PARCIALMENTE CORRIGIDO)
+- `save_checkpoint_bsgs()` agora salva `n_range_start` + range.
+- O motor usa `BSGS_CURRENT` como cursor de trabalho.
+- Checkpoint atual captura range lógico + cursor de trabalho.
+
+2. Corridas de dados em variaveis de controle (JÁ CORRIGIDO)
+- `steps[]` e `ends[]` agora usam atomics com `steps_load_relaxed` e `steps_add_relaxed` (linhas 513-518).
+- `bsgs_found[]` usa atomics `bsgs_found_load_relaxed` e `bsgs_found_store_release`.
+
+3. Uso de `rand()` em multiplas threads (JÁ CORRIGIDO)
+- `rand()` global substituído por `thread_rng_next_bounded()` com `rng_state` por thread (linhas 5048, 5066, 5589, 5607).
+
+4. Validacao final fraca no third check (JÁ CORRIGIDO)
+- `bsgs_thirdcheck()` agora valida ponto completo.
+
+5. Range mutavel no meio da busca (PARCIAL)
+- `n_range_end` é usado como cursor de trabalho em alguns modos.
+- `BSGS_CURRENT` serve como cursor principal.
+
+6. Vazamento por thread (JÁ CORRIGIDO)
+- `IntGroup` agora tem `delete grp` em todos os caminhos (18 locations).
+
+7. Hot path com recomputacao pesada (PENDENTE)
+- `bsgs_secondcheck()` e `bsgs_thirdcheck()` ainda repetem `ComputePublicKey()`.
+
+8. Estruturas manuais antigas (PARCIAL)
+- `bsgs_searchbinary()` já reescrita de forma robusta.
+- `bPtable` usa Cuckoo filter otimizado.
+
+Plano por etapas
+
+Etapa 1: Corretude e seguranca do estado
+Status: PARCIAL
+1. Checkpoint agora inclui range + cursor de trabalho. (CONCLUIDO)
+2. Opcional: persistir `bsgs_found` no checkpoint quando houver multiplos alvos. (PENDENTE)
+3. Revisar retomada para cenarios com multiplos alvos e modos nao sequenciais. (PENDENTE)
+
+Impacto esperado
+- Performance: neutro a pequena perda.
+- Beneficio: elimina retomada incorreta e reduz risco de falso positivo.
+
+Etapa 2: Concorrencia
+Status: CONCLUIDO
+1. `bsgs_found[]` agora usa atomics em todos os caminhos. (CONCLUIDO)
+2. `steps[]` e `ends[]` usam atomics. (CONCLUIDO)
+3. RNG por thread implementado. (CONCLUIDO)
+
+Impacto esperado
+- Performance: pequeno a medio ganho em multithread.
+- Beneficio: melhor escalabilidade e menos comportamento emergente.
+
+Etapa 3: Hot path BSGS
+Status: CONCLUIDO
+1. Criadas funcoes `bsgs_secondcheck_with_point()` e `bsgs_thirdcheck_with_point()` que recebem ponto pré-computado. (CONCLUIDO)
+2. Loop principal agora reaproveita ponto `pts[i]` ja calculado, evitando `ComputePublicKey()` redundante. (CONCLUIDO)
+3. Especializado para todos os modos BSGS (sequential, backward, both, random, dance). (CONCLUIDO)
+
+Impacto esperado
+- Performance: ganho medio a alto.
+- Beneficio: melhora real de throughput do BSGS.
+
+Etapa 4: Estruturas e lookup
+Status: PARCIAL
+1. `bPtable` ja usa Cuckoo filter otimizado.
+2. `bsgs_searchbinary()` ja robusto.
+3. Shards de cuckoo ja em uso.
+
+Impacto esperado
+- Performance: pequeno a medio ganho.
+- Beneficio: menor latencia por pre-hit e melhor uso de memoria.
+
+Etapa 5: Consolidacao de codigo
+Status: PARCIAL
+1. RNG compartilhado entre Address e BSGS (via hardware_profile.h). (CONCLUIDO)
+2. Utilitarios de checkpoint compartilhados. (PENDENTE)
+
+Impacto esperado
+- Performance: baixo ganho direto.
+- Beneficio: reduz risco de regressao e facilita tuning futuro.
+
+Prioridade recomendada
+1. Etapa 1 (parcial)
+2. Etapa 2 (CONCLUIDO - atomics implementados)
+3. Etapa 3
+4. Etapa 4 (parcial)
+5. Etapa 5 (parcial)
+
+Ordem de maior ROI tecnico
+1. Checkpoint fiel + range de trabalho separado do range logico (PARCIAL)
+2. Atomics para `bsgs_found` e metricas (CONCLUIDO)
+3. RNG por thread (CONCLUIDO)
+4. Validacao final por ponto completo (CONCLUIDO)
+5. Reducao de recomputacao em `secondcheck`/`thirdcheck` (CONCLUIDO - com _with_point variants)

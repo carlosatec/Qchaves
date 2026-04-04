@@ -150,7 +150,9 @@ int64_t bsgs_partition(struct bsgs_xvalue *arr, int64_t n);
 
 int bsgs_searchbinary(struct bsgs_xvalue *arr,char *data,int64_t array_length,uint64_t *r_value);
 int bsgs_secondcheck(Int *start_range,uint32_t a,uint32_t k_index,Int *privatekey);
+int bsgs_secondcheck_with_point(Int *start_range,uint32_t a,uint32_t k_index,Int *privatekey,Point *precomputed_point);
 int bsgs_thirdcheck(Int *start_range,uint32_t a,uint32_t k_index,Int *privatekey);
+int bsgs_thirdcheck_with_point(Int *start_range,uint32_t a,uint32_t k_index,Int *privatekey,Point *precomputed_point,Point *precomputed_neg);
 
 void sha256sse_22(uint8_t *src0, uint8_t *src1, uint8_t *src2, uint8_t *src3, uint8_t *dst0, uint8_t *dst1, uint8_t *dst2, uint8_t *dst3);
 void sha256sse_23(uint8_t *src0, uint8_t *src1, uint8_t *src2, uint8_t *src3, uint8_t *dst0, uint8_t *dst1, uint8_t *dst2, uint8_t *dst3);
@@ -4187,7 +4189,7 @@ pn.y.ModAdd(&GSn[i].y);
 						pts[i].x.Get32Bytes((unsigned char*)xpoint_raw);
 						r = cuckoo_check(&cuckoo_bP[((unsigned char)xpoint_raw[0])],xpoint_raw,32);
 						if(r) {
-							r = bsgs_secondcheck(&base_key,((j*1024) + i),k,&keyfound);
+							r = bsgs_secondcheck_with_point(&base_key,((j*1024) + i),k,&keyfound,&pts[i]);
 							if(r)	{
 								hextemp = keyfound.GetBase16();
 								printf("[+] Thread Key found privkey %s   \n",hextemp);
@@ -4590,6 +4592,88 @@ int bsgs_thirdcheck(Int *start_range,uint32_t a,uint32_t k_index,Int *privatekey
 				Why JLP?
 				This is is an special case
 			*/
+			if(BSGS_Q.x.IsEqual(&BSGS_AMP3[i].x))	{
+				calcualteindex(i,&calculatedkey);
+				privatekey->Set(&calculatedkey);
+				privatekey->Add(&base_key);
+				found = 1;
+			}
+		}
+		i++;
+	}while(i < 32 && !found);
+	return found;
+}
+
+int bsgs_secondcheck_with_point(Int *start_range,uint32_t a,uint32_t k_index,Int *privatekey,Point *precomputed_point)	{
+	int i = 0,found = 0,r = 0;
+	Int base_key;
+	Point point_aux;
+	Point BSGS_Q, BSGS_Q_AMP;
+	char xpoint_raw[32];
+	Point &target_point = OriginalPointsBSGS[k_index];
+
+	base_key.Set(&BSGS_M_double);
+	base_key.Mult((uint64_t) a);
+	base_key.Add(start_range);
+
+	point_aux = secp->Negation(*precomputed_point);
+	BSGS_Q = secp->AddDirect(target_point,point_aux);
+
+	do {
+		BSGS_Q_AMP = secp->AddDirect(BSGS_Q,BSGS_AMP2[i]);
+		BSGS_Q_AMP.x.Get32Bytes((unsigned char *) xpoint_raw);
+		r = cuckoo_check(&cuckoo_bPx2nd[(uint8_t) xpoint_raw[0]],xpoint_raw,32);
+		if(r)	{
+			found = bsgs_thirdcheck_with_point(&base_key,i,k_index,privatekey,precomputed_point,&point_aux);
+		}
+		i++;
+	}while(i < 32 && !found);
+	return found;
+}
+
+int bsgs_thirdcheck_with_point(Int *start_range,uint32_t a,uint32_t k_index,Int *privatekey,Point *precomputed_point,Point *precomputed_neg)	{
+	uint64_t j = 0;
+	int i = 0,found = 0,r = 0;
+	Int base_key,calculatedkey,candidate_offset;
+	Point point_aux;
+	Point BSGS_Q, BSGS_Q_AMP;
+	char xpoint_raw[32];
+	Point &target_point = OriginalPointsBSGS[k_index];
+
+	base_key.SetInt32(a);
+	base_key.Mult(&BSGS_M2_double);
+	base_key.Add(start_range);
+
+	BSGS_Q = secp->AddDirect(target_point,*precomputed_neg);
+	
+	do {
+		BSGS_Q_AMP = secp->AddDirect(BSGS_Q,BSGS_AMP3[i]);
+		BSGS_Q_AMP.x.Get32Bytes((unsigned char *)xpoint_raw);
+		r = cuckoo_check(&cuckoo_bPx3rd[(uint8_t)xpoint_raw[0]],xpoint_raw,32);
+		if(r)	{
+			r = bsgs_searchbinary(bPtable,xpoint_raw,bsgs_m3,&j);
+			if(r)	{
+				calcualteindex(i,&calculatedkey);
+				candidate_offset.Set(&calculatedkey);
+				candidate_offset.Add((uint64_t)(j+1));
+				privatekey->Set(&candidate_offset);
+				privatekey->Add(&base_key);
+				point_aux = secp->ComputePublicKey(privatekey);
+				if(point_aux.x.IsEqual(&target_point.x) && point_aux.y.IsEqual(&target_point.y))	{
+					found = 1;
+				}
+				else	{
+					privatekey->Set(&calculatedkey);
+					privatekey->Sub((uint64_t)(j+1));
+					privatekey->Add(&base_key);
+					point_aux = secp->ComputePublicKey(privatekey);
+					if(point_aux.x.IsEqual(&target_point.x) && point_aux.y.IsEqual(&target_point.y))	{
+						found = 1;
+					}
+				}
+			}
+		}
+		else	{
 			if(BSGS_Q.x.IsEqual(&BSGS_AMP3[i].x))	{
 				calcualteindex(i,&calculatedkey);
 				privatekey->Set(&calculatedkey);
@@ -5766,14 +5850,14 @@ void *thread_process_bsgs_both(void *vargp)	{
 	pn.y.ModAdd(&GSn[i].y);
 #endif
 
-						pts[0] = pn;
-						
-						for(int i = 0; i<CPU_GRP_SIZE && bsgs_found_load_relaxed(k) == 0; i++) {
-							pts[i].x.Get32Bytes((unsigned char*)xpoint_raw);
-							r = cuckoo_check(&cuckoo_bP[((unsigned char)xpoint_raw[0])],xpoint_raw,32);
-							if(r) {
-								r = bsgs_secondcheck(&base_key,((j*1024) + i),k,&keyfound);
-								if(r)	{
+					pts[0] = pn;
+					
+					for(int i = 0; i<CPU_GRP_SIZE && bsgs_found_load_relaxed(k) == 0; i++) {
+						pts[i].x.Get32Bytes((unsigned char*)xpoint_raw);
+						r = cuckoo_check(&cuckoo_bP[((unsigned char)xpoint_raw[0])],xpoint_raw,32);
+						if(r) {
+							r = bsgs_secondcheck_with_point(&base_key,((j*1024) + i),k,&keyfound,&pts[i]);
+							if(r)	{
 									hextemp = keyfound.GetBase16();
 									printf("[+] Thread Key found privkey %s   \n",hextemp);
 									point_found = secp->ComputePublicKey(&keyfound);

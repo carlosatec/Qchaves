@@ -61,6 +61,7 @@ Implementação do algoritmo *Baby-step Giant-step*.
 - **Validação Final Endurecida:** A confirmação final passou a comparar o ponto completo, não apenas `x`.
 - **Workers Mais Seguros:** Melhorias de concorrência em `steps/ends`, `bsgs_found` com visibilidade mais consistente e RNG local por thread nos modos randômicos.
 - **RNG por Thread:** Modos randômicos agora usam `thread_rng_next_bounded()` com estado independente por thread.
+- **Hot Path Otimizado:** secondcheck/thirdcheck agora reaproveitam pontos pré-computados do loop principal, eliminando `ComputePublicKey()` redundante.
 - **Auto-Tuning V1**: Suporta `--auto`, `--auto=safe`, `--auto=balanced`, `--auto=max` e `--auto=benchmark`, detectando threads, RAM e WSL para sugerir `-t`, `-k` e `-n`.
 - **Uso ideal:** Encontrar chaves em intervalos conhecidos com velocidade astronômica. Requer RAM.
 - **Exemplo (Puzzle 66):**
