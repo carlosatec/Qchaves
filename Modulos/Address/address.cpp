@@ -703,8 +703,6 @@ int main(int argc, char **argv)	{
 	int s;
 #endif
 
-	srand(time(NULL));
-
 	secp = new Secp256K1();
 	secp->Init();
 	OUTPUTSECONDS.SetInt32(30);
@@ -2690,7 +2688,6 @@ void *thread_process(void *vargp)	{
 	
 	char publickeyhashrmd160[20];
 	char publickeyhashrmd160_uncompress[4][20];
-	char rawvalue[32];
 	
 	char publickeyhashrmd160_endomorphism[12][4][20];
 

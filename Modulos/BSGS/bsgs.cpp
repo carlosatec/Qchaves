@@ -782,8 +782,6 @@ int main(int argc, char **argv)	{
 	int s;
 #endif
 
-	srand(time(NULL));
-
 	secp = new Secp256K1();
 	secp->Init();
 	OUTPUTSECONDS.SetInt32(30);
@@ -2777,7 +2775,6 @@ void *thread_process(void *vargp)	{
 	
 	char publickeyhashrmd160[20];
 	char publickeyhashrmd160_uncompress[4][20];
-	char rawvalue[32];
 	
 	char publickeyhashrmd160_endomorphism[12][4][20];
 	
@@ -4615,6 +4612,8 @@ int bsgs_secondcheck_with_point(Int *start_range,uint32_t a,uint32_t k_index,Int
 }
 
 int bsgs_thirdcheck_with_point(Int *start_range,uint32_t a,uint32_t k_index,Int *privatekey,Point *precomputed_point,Point *precomputed_neg)	{
+	(void)precomputed_point;
+	(void)precomputed_neg;
 	uint64_t j = 0;
 	int i = 0,found = 0,r = 0;
 	Int base_key,calculatedkey,candidate_offset;
