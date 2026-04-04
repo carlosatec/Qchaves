@@ -2036,7 +2036,7 @@ int main(int argc, char **argv)	{
 				
 				for(j = 0; j < NTHREADS; j++)	{
 #if defined(_WIN64) && !defined(__CYGWIN__)
-					bPload_mutex = CreateMutex(NULL, FALSE, NULL);
+					bPload_mutex[j] = CreateMutex(NULL, FALSE, NULL);
 #else
 					pthread_mutex_init(&bPload_mutex[j],NULL);
 #endif

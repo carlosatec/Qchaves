@@ -1,8 +1,6 @@
-# 🚀 Qchaves Core Engines: Suite de Módulos de Alta Performance
+# Qchaves Core Engines: Suite de Módulos de Alta Performance
 
 Bem-vindo à nova arquitetura modular do **Qchaves**. Este diretório contém os motores de busca core, cada um otimizado para cenários específicos de recuperação de chaves privadas na curva elíptica `secp256k1`.
-
----
 
 ## 🛠️ Como Compilar
 
@@ -13,16 +11,15 @@ Instale as dependências essenciais:
 ```bash
 sudo apt update && sudo apt install build-essential libgmp-dev -y
 ```
-
 ### 2. Compilação Global (Recomendado)
 Para compilar todos os módulos de uma vez e gerar os binários otimizados:
 ```bash
 make all -j$(nproc)
-
+```
+### Caso queira limpar e compilar denovo
 make clean all  // para limpar os arquivos gerados
 
-```
-
+``
 ### 3. Compilação Individual
 Você também pode compilar módulos específicos caso precise de apenas um:
 ```bash
@@ -30,15 +27,14 @@ make address   # Compila apenas o modo-address
 make bsgs      # Compila apenas o modo-bsgs
 make kangaroo  # Compila apenas o modo-kangaroo
 ```
-
 ---
-
-## 🏎️ Resumo dos Módulos e Exemplos de Uso
+## Resumo dos Módulos e Exemplos de Uso
 
 Cada módulo gera um binário independente padronizado com o prefixo `modo-`. Para rodar os exemplos abaixo, certifique-se de estar dentro da pasta `Modulos/`.
 
-### 📍 1. Address Engine (`modo-address`)
-O motor de busca por endereços clássico, agora refatorado para performance extrema (**v2.1**).
+### 1. Address Engine (`modo-address`)
+O motor de busca por endereços Bitcoin, agora refatorado para performance extrema (**v2.2**).
+- **Modos Disponíveis:** Apenas `address` e `bsgs` (demais modos foram removidos para simplificação)
 - **Busca Incremental:** Otimizado com `startP` incremental (+20-40% de boost), eliminando multiplicações escalares redundantes.
 - **Fused Hot Loop:** Lógica de hashing e verificação fundida em um único ciclo, minimizando *branch mispredictions*.
 - **Checkpoint Revisado:** O formato atual salva cursor, `range_end` e modo randômico com compatibilidade legada.
@@ -47,15 +43,20 @@ O motor de busca por endereços clássico, agora refatorado para performance ext
 - **RNG por Thread:** Randômico agora usa estado independente por thread (`thread_rand()`) para melhor reprodução e performance.
 - **Auto-Tuning V1**: Suporta `--auto`, `--auto=safe`, `--auto=balanced`, `--auto=max` e `--auto=benchmark`, detectando threads, RAM e WSL para sugerir `-t`.
 - **Uso ideal:** Quando você tem uma lista de endereços Bitcoin (1...) e quer testar grandes intervalos sequenciais ou randômicos.
-- **Exemplo (Puzzle 21):**
+- **Exemplo (Puzzle 21 - Modo Random):**
+  ```bash
+  ./Address/modo-address -f Puzzles/21.txt -b 21 -l compress -R -t 8 -s 10
+  ```
+- **Exemplo (Puzzle 21 - Modo Sequential):**
   ```bash
   ./Address/modo-address -f Puzzles/21.txt -b 21 -l compress -t 8 -s 10
   ```
+- **Exemplo (Modo Random com Auto-Tuning):**
   ```bash
-  ./Address/modo-address --auto=balanced -f Puzzles/21.txt -b 21
+  ./Address/modo-address --auto=balanced -f Puzzles/21.txt -b 21 -R
   ```
 
-### 👶 2. BSGS Engine (`modo-bsgs`)
+### 2. BSGS Engine (`modo-bsgs`)
 Implementação do algoritmo *Baby-step Giant-step*.
 - **Checkpoint v3:** Formato atual salva range, progresso, modo BSGS e estado `bsgs_found` para múltiplos alvos, com compatibilidade retroativa (BSGS/BSGS2/BSGS3).
 - **Validação Final Endurecida:** A confirmação final passou a comparar o ponto completo, não apenas `x`.
@@ -72,7 +73,7 @@ Implementação do algoritmo *Baby-step Giant-step*.
   ./BSGS/modo-bsgs --auto=balanced -f Puzzles/66.txt -b 66
   ```
 
-### 🦘 3. Kangaroo Engine (`modo-kangaroo`)
+### 3. Kangaroo Engine (`modo-kangaroo`)
 Motor de alta performance baseado no algoritmo *Pollard's Kangaroo*, agora totalmente **Standalone (C++)** e unificado com paridade total de recursos.
 - **Standalone Premium**: Inclui interface visual colorida (ANSI), geração nativa de WIF e Bitcoin Address.
 - **Independência Total**: Não requer orquestradores externos para a lógica de saltos.
@@ -93,12 +94,11 @@ Motor de alta performance baseado no algoritmo *Pollard's Kangaroo*, agora total
   ```
 
 ---
-
 ## 💾 Sistema de Checkpoints Unificado (v2.0)
 
 Implementamos um sistema de persistência robusto e interativo em todos os motores para garantir que você nunca perca o progresso de uma busca de longa duração.
 
-### 🔄 Como Funciona
+### Como Funciona
 1. **Nomenclatura Dinâmica**: Para evitar que o progresso de um puzzle sobrescreva outro, os arquivos são nomeados por módulo e bit-range:
    - `address_bit66.ckp`
    - `bsgs_bit66.ckp`
@@ -111,28 +111,28 @@ Implementamos um sistema de persistência robusto e interativo em todos os motor
 4. **Interrupção Segura (Ctrl+C)**: Todos os módulos capturam o sinal de interrupção e realizam um salvamento de emergência do estado exato antes de fechar.
 
 ---
-
-## 🦅 Cuckoo Filter: O Novo Padrão de Busca
+## Cuckoo Filter: O Novo Padrão de Busca
 
 Substituímos o antigo sistema de *Bloom Filters* pela arquitetura **Cuckoo Filter**, trazendo uma evolução massiva em performance e eficiência de cache em toda a suite.
 
-### 🚀 Por que Cuckoo?
+### Por que Cuckoo?
 - **Cache Local Friendly:** Diferente do Bloom Filter, que espalha bits aleatoriamente pela RAM (causando muitos *cache misses*), o Cuckoo Filter organiza os dados em baldes contíguos. Isso permite que a CPU verifique se uma chave existe mantendo os dados no cache L1/L2.
 - **XXHash Otimizado:** Utilizamos o algoritmo `XXHash64` para geração de fingerprints, garantindo colisões mínimas e velocidade superior a qualquer hash tradicional.
 - **Menor Falsa Positividade:** Com o mesmo uso de memória, o Cuckoo Filter oferece uma taxa de erro significativamente menor que os filtros anteriores.
 
-### ⚠️ Importante: Migração de Arquivos (`.blm` → `.ckf`)
-A nova arquitetura **não é compatível** com os arquivos de tabela antigos.
-- **Nova Extensão:** Os arquivos de filtro agora utilizam a extensão **`.ckf`** (ex: `keyhunt_bsgs_4_1.ckf`).
-- **Ação Requerida:** Você deve excluir seus arquivos `.blm` antigos e gerar as novas tabelas usando a versão atual dos módulos. O programa informará caso detecte arquivos legados.
-
 ---
-
-## 📖 Exemplo Rápido de Uso
+## Exemplo Rápido de Uso
 
 Para rodar o motor de endereços no range do puzzle 66 a partir da pasta `Modulos/`:
+
+### Modo Random (busca aleatória no range):
 ```bash
 ./Address/modo-address -f ../Puzzles/66.txt -b 66 -l compress -R -t 8 -s 10
+```
+
+### Modo Sequential (busca sequencial):
+```bash
+./Address/modo-address -f ../Puzzles/66.txt -b 66 -l compress -t 8 -s 10
 ```
 
 ## ⚙️ Explicação dos Parâmetros
@@ -141,6 +141,8 @@ Aqui estão os detalhes técnicos dos comandos mais utilizados:
 
 | Parâmetro | Descrição | Exemplo |
 | :--- | :--- | :--- |
+| **`-m`** | **Mode**: Mode de busca. | `-m address` ou `-m bsgs` |
+| **`-R`** | **Random**: Ativa busca aleatória no range (sem -R usa modo sequential). | `-R` (busca aleatória) |
 | **`-b`** | **Bit Range**: Define o intervalo da busca baseado em potências de 2. | `-b 66` (Entre $2^{65}$ e $2^{66}$) |
 | **`-f`** | **File**: Carrega o arquivo com o alvo (PubKey/Address). | `-f Puzzles/120.txt` |
 | **`-t`** | **Threads**: Número de núcleos do CPU para processamento. | `-t 8` (Usa 8 núcleos) |
@@ -150,7 +152,7 @@ Aqui estão os detalhes técnicos dos comandos mais utilizados:
 | **`-w`** | **Active Wild**: Número de kangaroos `wild` na frota do Kangaroo. | `-w 40` |
 | **`--auto`** | **Auto Profile**: Aplica tuning automático por hardware. Suporta `safe`, `balanced`, `max` e `benchmark`. | `--auto=balanced` |
 
-### 🛠️ Auto-Tuning (--auto)
+### Auto-Tuning (--auto)
 
 Todos os motores agora suportam **auto-detecção de hardware** com profiles ajustáveis:
 
@@ -183,7 +185,7 @@ Os valores escolhidos automaticamente podem ser sobrescritos manualmente. Overri
 ./BSGS/modo-bsgs --auto=max -t 8 -f Puzzles/66.txt -b 66
 ```
 
-### ⚙️ Configurando Performance e Memória
+### Configurando Performance e Memória
 
 O desempenho dos motores depende diretamente da configuração dos parâmetros `-t` e `-k`.
 
@@ -218,7 +220,7 @@ Utilizado no motor **BSGS**, o parâmetro `-k` escala a quantidade de "Baby Step
 | **4 TB** | `-n 0x4000000000000 -k 131072` |
 | **8 TB** | `-n 0x10000000000000 -k 131072` |
 
-## 💎 Saída e Resultados (Premium UI)
+## Saída e Resultados (Premium UI)
 
 A suíte Qchaves agora conta com uma interface de saída **Premium** no console e logs estruturados para facilitar a importação imediata de fundos.
 
@@ -235,7 +237,6 @@ As chaves encontradas não são apenas exibidas, mas salvas permanentemente.
 - **Formato:** Salvo em texto puro estruturado (ASCII) para máxima compatibilidade com qualquer editor de texto.
 
 ---
-
 > [!TIP]
 > - Use sempre o parâmetro `-t` seguido do número de núcleos do seu processador para obter a performance máxima.
 > - Para o **BSGS**, o parâmetro `-k` (fator de memória) agora é 50% mais eficiente graças ao Cuckoo Filter.
@@ -243,7 +244,6 @@ As chaves encontradas não são apenas exibidas, mas salvas permanentemente.
 > - Ao encontrar uma chave, use o **WIF Format** gerado no console para importar diretamente seus fundos sem precisar de conversores externos.
 
 ---
-
 ## 🤝 Créditos & Referências
 
 Este projeto foi construído e otimizado com base em excelentes trabalhos da comunidade. Agradecimentos especiais aos desenvolvedores dos projetos que serviram de base:
