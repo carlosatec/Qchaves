@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <ctype.h>
 #include <math.h>
 #include <time.h>
 #include <vector>
@@ -402,6 +403,119 @@ Int lambda,lambda2,beta,beta2;
 
 Secp256K1 *secp;
 
+static inline uint64_t steps_load_relaxed(int index) {
+    return __atomic_load_n(&steps[index], __ATOMIC_RELAXED);
+}
+
+static inline void steps_add_relaxed(int index, uint64_t delta) {
+    __atomic_add_fetch(&steps[index], delta, __ATOMIC_RELAXED);
+}
+
+static inline unsigned int ends_load_acquire(int index) {
+    return __atomic_load_n(&ends[index], __ATOMIC_ACQUIRE);
+}
+
+static inline void ends_store_release(int index, unsigned int value) {
+    __atomic_store_n(&ends[index], value, __ATOMIC_RELEASE);
+}
+
+static inline int bsgs_found_load_relaxed(int index) {
+    return __atomic_load_n(&bsgs_found[index], __ATOMIC_RELAXED);
+}
+
+static inline void bsgs_found_store_release(int index, int value) {
+    __atomic_store_n(&bsgs_found[index], value, __ATOMIC_RELEASE);
+}
+
+static inline bool all_bsgs_points_found() {
+    for (uint32_t i = 0; i < bsgs_point_number; ++i) {
+        if (!bsgs_found_load_relaxed(i)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static inline uint64_t mix_u64(uint64_t x) {
+    x += 0x9e3779b97f4a7c15ULL;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+
+static inline uint32_t thread_rng_next_bounded(uint64_t *state, uint32_t bound) {
+    *state = mix_u64(*state);
+    return bound > 0 ? (uint32_t)(*state % bound) : 0;
+}
+
+static inline bool equals_ignore_case(const char *a, const char *b) {
+    if (a == NULL || b == NULL) {
+        return false;
+    }
+    while (*a && *b) {
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) {
+            return false;
+        }
+        ++a;
+        ++b;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+static inline bool env_truthy(const char *value) {
+    if (value == NULL) {
+        return false;
+    }
+    return strcmp(value, "1") == 0
+        || equals_ignore_case(value, "true")
+        || equals_ignore_case(value, "yes")
+        || equals_ignore_case(value, "y")
+        || equals_ignore_case(value, "on");
+}
+
+static inline bool env_falsy(const char *value) {
+    if (value == NULL) {
+        return false;
+    }
+    return strcmp(value, "0") == 0
+        || equals_ignore_case(value, "false")
+        || equals_ignore_case(value, "no")
+        || equals_ignore_case(value, "n")
+        || equals_ignore_case(value, "off");
+}
+
+void snapshot_bsgs_progress(Int *range_start_snapshot, Int *range_end_snapshot, Int *current_snapshot, int *mode_snapshot) {
+#if defined(_WIN64) && !defined(__CYGWIN__)
+    WaitForSingleObject(bsgs_thread, INFINITE);
+#else
+    pthread_mutex_lock(&bsgs_thread);
+#endif
+    range_start_snapshot->Set(&n_range_start);
+    range_end_snapshot->Set(&n_range_end);
+    current_snapshot->Set(&BSGS_CURRENT);
+    *mode_snapshot = FLAGBSGSMODE;
+#if defined(_WIN64) && !defined(__CYGWIN__)
+    ReleaseMutex(bsgs_thread);
+#else
+    pthread_mutex_unlock(&bsgs_thread);
+#endif
+}
+
+bool should_resume_bsgs_checkpoint(const char *filename) {
+    const char *env = getenv("QCHAVES_AUTO_RESUME");
+    if (env_truthy(env)) {
+        printf("[+] Auto-resume habilitado por QCHAVES_AUTO_RESUME. Retomando %s\n", filename);
+        return true;
+    }
+    if (env_falsy(env)) {
+        printf("[i] Auto-resume desabilitado por QCHAVES_AUTO_RESUME. Ignorando %s\n", filename);
+        return false;
+    }
+    printf("[?] Checkpoint detectado: %s. Deseja retomar a busca? (s/n): ", filename);
+    int c = getchar();
+    return c == 's' || c == 'S';
+}
+
 void signal_handler(int sig) {
     if (sig == SIGINT) {
         printf("\n[!] Interrupção detectada. Salvando checkpoint...\n");
@@ -414,10 +528,19 @@ void save_checkpoint_bsgs(int bits) {
     sprintf(filename, "bsgs_bit%d.ckp", bits);
     FILE *f = fopen(filename, "wb");
     if (f) {
-        char *hextemp = n_range_start.GetBase16();
-        fprintf(f, "BSGS\n%d\n%s\n", bits, hextemp);
+        Int range_start_snapshot;
+        Int range_end_snapshot;
+        Int current_snapshot;
+        int mode_snapshot = 0;
+        snapshot_bsgs_progress(&range_start_snapshot, &range_end_snapshot, &current_snapshot, &mode_snapshot);
+        char *range_start_hex = range_start_snapshot.GetBase16();
+        char *range_end_hex = range_end_snapshot.GetBase16();
+        char *current_hex = current_snapshot.GetBase16();
+        fprintf(f, "BSGS2\n%d\n%d\n%s\n%s\n%s\n", bits, mode_snapshot, range_start_hex, range_end_hex, current_hex);
         fclose(f);
-        free(hextemp);
+        free(range_start_hex);
+        free(range_end_hex);
+        free(current_hex);
     }
 }
 
@@ -426,17 +549,34 @@ bool load_checkpoint_bsgs(int bits) {
     sprintf(filename, "bsgs_bit%d.ckp", bits);
     FILE *f = fopen(filename, "rb");
     if (f) {
-        char magic[10], hex[128];
-        int fbits;
-        if (fscanf(f, "%s\n%d\n%s\n", magic, &fbits, hex) == 3) {
-            if (strcmp(magic, "BSGS") == 0 && fbits == bits) {
-                printf("[?] Checkpoint detectado: %s. Deseja retomar a busca? (s/n): ", filename);
-                char c = getchar();
-                if (c == 's' || c == 'S') {
-                    n_range_start.SetBase16(hex);
-                    printf("[+] Retomando da posição: 0x%s\n", hex);
-                    fclose(f);
-                    return true;
+        char magic[16] = {0};
+        char range_start_hex[128] = {0};
+        char range_end_hex[128] = {0};
+        char current_hex[128] = {0};
+        int fbits = 0;
+        int mode_snapshot = 0;
+        if (fscanf(f, "%15s", magic) == 1) {
+            if (strcmp(magic, "BSGS2") == 0) {
+                if (fscanf(f, "%d\n%d\n%127s\n%127s\n%127s\n", &fbits, &mode_snapshot, range_start_hex, range_end_hex, current_hex) == 5 && fbits == bits) {
+                    if (should_resume_bsgs_checkpoint(filename)) {
+                        n_range_start.SetBase16(range_start_hex);
+                        n_range_end.SetBase16(range_end_hex);
+                        BSGS_CURRENT.SetBase16(current_hex);
+                        FLAGBSGSMODE = mode_snapshot;
+                        printf("[+] Retomando BSGS_CURRENT: 0x%s\n", current_hex);
+                        fclose(f);
+                        return true;
+                    }
+                }
+            } else if (strcmp(magic, "BSGS") == 0) {
+                if (fscanf(f, "%d\n%127s\n", &fbits, current_hex) == 2 && fbits == bits) {
+                    if (should_resume_bsgs_checkpoint(filename)) {
+                        n_range_start.SetBase16(current_hex);
+                        BSGS_CURRENT.SetBase16(current_hex);
+                        printf("[+] Retomando da posição: 0x%s\n", current_hex);
+                        fclose(f);
+                        return true;
+                    }
                 }
             }
         }
@@ -1019,7 +1159,7 @@ int main(int argc, char **argv)	{
 		}
 		bsgs_found = (int*) calloc(N,sizeof(int));
 		checkpointer((void *)bsgs_found,__FILE__,"calloc","bsgs_found" ,__LINE__ -1 );
-		OriginalPointsBSGS.reserve(N);
+		OriginalPointsBSGS.resize(N);
 		OriginalPointsBSGScompressed = (bool*) malloc(N*sizeof(bool));
 		checkpointer((void *)OriginalPointsBSGScompressed,__FILE__,"malloc","OriginalPointsBSGScompressed" ,__LINE__ -1 );
 		pointx_str = (char*) malloc(65);
@@ -1352,9 +1492,9 @@ int main(int argc, char **argv)	{
 		BSGS_MP3 = secp->ComputePublicKey(&BSGS_M3);
 		BSGS_MP3_double = secp->ComputePublicKey(&BSGS_M3_double);
 		
-		BSGS_AMP2.reserve(32);
-		BSGS_AMP3.reserve(32);
-		GSn.reserve(CPU_GRP_SIZE/2);
+		BSGS_AMP2.resize(32);
+		BSGS_AMP3.resize(32);
+		GSn.resize(CPU_GRP_SIZE/2);
 
 		i= 0;
 
@@ -2154,7 +2294,7 @@ int main(int argc, char **argv)	{
 
 		check_flag = 1;
 		for(j = 0; j <NTHREADS && check_flag; j++) {
-			check_flag &= ends[j];
+			check_flag &= ends_load_acquire(j);
 		}
 		if(check_flag)	{
 			continue_flag = 0;
@@ -2166,7 +2306,7 @@ int main(int argc, char **argv)	{
 				total.SetInt32(0);
 				for(j = 0; j < NTHREADS; j++) {
 					pretotal.Set(&debugcount_mpz);
-					pretotal.Mult(steps[j]);					
+					pretotal.Mult(steps_load_relaxed(j));					
 					total.Add(&pretotal);
 				}
 				
@@ -2494,7 +2634,7 @@ void *thread_process_minikeys(void *vargp)	{
 						}
 					}
 				}
-				steps[thread_number]++;
+				steps_add_relaxed(thread_number, 1);
 				count+=1024;
 			}while(count < N_SEQUENTIAL_MAX && continue_flag);
 		}
@@ -3071,7 +3211,7 @@ void *thread_process(void *vargp)	{
 				}
 				*/
 
-				steps[thread_number]++;
+				steps_add_relaxed(thread_number, 1);
 
 				// Next start point (startP + GRP_SIZE*G)
 				pp = startP;
@@ -3092,7 +3232,8 @@ void *thread_process(void *vargp)	{
 			}while(count < N_SEQUENTIAL_MAX && continue_flag);
 		}
 	} while(continue_flag);
-	ends[thread_number] = 1;
+	delete grp;
+	ends_store_release(thread_number, 1);
 	return NULL;
 }
 
@@ -3508,7 +3649,7 @@ void *thread_process_vanity(void *vargp)	{
 					temp_stride.Mult(&stride);
 					key_mpz.Add(&temp_stride);
 				}
-				steps[thread_number]++;
+				steps_add_relaxed(thread_number, 1);
 
 				// Next start point (startP + GRP_SIZE*G)
 				pp = startP;
@@ -3529,7 +3670,8 @@ void *thread_process_vanity(void *vargp)	{
 			}while(count < N_SEQUENTIAL_MAX && continue_flag);
 		}
 	} while(continue_flag);
-	ends[thread_number] = 1;
+	delete grp;
+	ends_store_release(thread_number, 1);
 	return NULL;
 }
 
@@ -3744,30 +3886,23 @@ void bsgs_myheapsort(struct bsgs_xvalue	*arr, int64_t n)	{
 }
 
 int bsgs_searchbinary(struct bsgs_xvalue *buffer,char *data,int64_t array_length,uint64_t *r_value) {
-	int64_t min,max,half,current;
-	int r = 0,rcmp;
-	min = 0;
-	current = 0;
-	max = array_length;
-	half = array_length;
-	while(!r && half >= 1) {
-		half = (max - min)/2;
-		rcmp = memcmp(data+16,buffer[current+half].value,BSGS_XVALUE_RAM);
-		if(rcmp == 0)	{
-			*r_value = buffer[current+half].index;
-			r = 1;
+	int64_t left = 0;
+	int64_t right = array_length;
+	while(left < right) {
+		const int64_t mid = left + ((right - left) >> 1);
+		const int cmp = memcmp(data + 16, buffer[mid].value, BSGS_XVALUE_RAM);
+		if(cmp == 0) {
+			*r_value = buffer[mid].index;
+			return 1;
+		}
+		if(cmp < 0) {
+			right = mid;
 		}
 		else	{
-			if(rcmp < 0) {
-				max = (max-half);
-			}
-			else	{
-				min = (min+half);
-			}
-			current = min;
+			left = mid + 1;
 		}
 	}
-	return r;
+	return 0;
 }
 
 #if defined(_WIN64) && !defined(__CYGWIN__)
@@ -3795,7 +3930,7 @@ void *thread_process_bsgs(void *vargp)	{
 	Point pts[CPU_GRP_SIZE];
 
 	// Unsigned integer variables
-	uint32_t k, l, r, salir, thread_number, cycles;
+	uint32_t k, r, thread_number, cycles;
 
 	// Other variables
 	int hLength = (CPU_GRP_SIZE / 2 - 1);
@@ -3863,10 +3998,10 @@ void *thread_process_bsgs(void *vargp)	{
 		km.Sub(&intaux);
 		point_aux = secp->ComputePublicKey(&km);
 		for(k = 0; k < bsgs_point_number ; k++)	{
-			if(bsgs_found[k] == 0)	{
+			if(bsgs_found_load_relaxed(k) == 0)	{
 				startP  = secp->AddDirect(OriginalPointsBSGS[k],point_aux);
 				uint32_t j = 0;
-				while( j < cycles && bsgs_found[k]== 0 )	{
+				while( j < cycles && bsgs_found_load_relaxed(k) == 0 )	{
 					int i;
 					for(i = 0; i < hLength; i++) {
 						dx[i].ModSub(&GSn[i].x,&startP.x);
@@ -3939,7 +4074,7 @@ pn.y.ModMulK1(&_s);
 pn.y.ModAdd(&GSn[i].y);
 #endif
 					pts[0] = pn;
-					for(int i = 0; i<CPU_GRP_SIZE && bsgs_found[k]== 0; i++) {
+					for(int i = 0; i<CPU_GRP_SIZE && bsgs_found_load_relaxed(k) == 0; i++) {
 						pts[i].x.Get32Bytes((unsigned char*)xpoint_raw);
 						r = cuckoo_check(&cuckoo_bP[((unsigned char)xpoint_raw[0])],xpoint_raw,32);
 						if(r) {
@@ -3968,12 +4103,8 @@ pn.y.ModAdd(&GSn[i].y);
 #else
 				pthread_mutex_unlock(&write_keys);
 #endif
-								bsgs_found[k] = 1;
-								salir = 1;
-								for(l = 0; l < bsgs_point_number && salir; l++)	{
-									salir &= bsgs_found[l];
-								}
-								if(salir)	{
+								bsgs_found_store_release(k, 1);
+								if(all_bsgs_points_found())	{
 									printf("All points were found\n");
 									exit(EXIT_FAILURE);
 								}
@@ -4000,9 +4131,10 @@ pn.y.ModAdd(&GSn[i].y);
 				} // end while
 			}// End if 
 		}
-		steps[thread_number]+=2;
+		steps_add_relaxed(thread_number, 2);
 	}while(1);
-	ends[thread_number] = 1;
+	delete grp;
+	ends_store_release(thread_number, 1);
 	return NULL;
 }
 
@@ -4017,7 +4149,7 @@ void *thread_process_bsgs_random(void *vargp)	{
 	char xpoint_raw[32],*aux_c,*hextemp;
 	Int base_key,keyfound,n_range_random;
 	Point base_point,point_aux,point_found;
-	uint32_t l,k,r,salir,thread_number,cycles;
+	uint32_t k,r,thread_number,cycles;
 	
 	IntGroup *grp = new IntGroup(CPU_GRP_SIZE / 2 + 1);
 	Point startP;
@@ -4099,10 +4231,10 @@ void *thread_process_bsgs_random(void *vargp)	{
 
 		/* We need to test individually every point in BSGS_Q */
 		for(k = 0; k < bsgs_point_number ; k++)	{
-			if(bsgs_found[k] == 0)	{			
+			if(bsgs_found_load_relaxed(k) == 0)	{			
 				startP  = secp->AddDirect(OriginalPointsBSGS[k],point_aux);
 				uint32_t j = 0;
-				while( j < cycles && bsgs_found[k]== 0 )	{
+				while( j < cycles && bsgs_found_load_relaxed(k) == 0 )	{
 				
 					int i;
 					for(i = 0; i < hLength; i++) {
@@ -4188,7 +4320,7 @@ pn.y.ModAdd(&GSn[i].y);
 
 					pts[0] = pn;
 					
-					for(int i = 0; i<CPU_GRP_SIZE && bsgs_found[k]== 0; i++) {
+					for(int i = 0; i<CPU_GRP_SIZE && bsgs_found_load_relaxed(k) == 0; i++) {
 						pts[i].x.Get32Bytes((unsigned char*)xpoint_raw);
 						r = cuckoo_check(&cuckoo_bP[((unsigned char)xpoint_raw[0])],xpoint_raw,32);
 						if(r) {
@@ -4218,12 +4350,8 @@ pn.y.ModAdd(&GSn[i].y);
 								pthread_mutex_unlock(&write_keys);
 #endif
 
-								bsgs_found[k] = 1;
-								salir = 1;
-								for(l = 0; l < bsgs_point_number && salir; l++)	{
-									salir &= bsgs_found[l];
-								}
-								if(salir)	{
+								bsgs_found_store_release(k, 1);
+								if(all_bsgs_points_found())	{
 									printf("All points were found\n");
 									exit(EXIT_FAILURE);
 								}
@@ -4255,9 +4383,10 @@ pn.y.ModAdd(&GSn[i].y);
 			}	//End if
 		} // End for with k bsgs_point_number
 
-		steps[thread_number]+=2;
+		steps_add_relaxed(thread_number, 2);
 	}while(1);
-	ends[thread_number] = 1;
+	delete grp;
+	ends_store_release(thread_number, 1);
 	return NULL;
 }
 
@@ -4270,8 +4399,9 @@ int bsgs_secondcheck(Int *start_range,uint32_t a,uint32_t k_index,Int *privateke
 	int i = 0,found = 0,r = 0;
 	Int base_key;
 	Point base_point,point_aux;
-	Point BSGS_Q, BSGS_S,BSGS_Q_AMP;
+	Point BSGS_Q, BSGS_Q_AMP;
 	char xpoint_raw[32];
+	Point &target_point = OriginalPointsBSGS[k_index];
 
 
 	base_key.Set(&BSGS_M_double);
@@ -4286,7 +4416,7 @@ int bsgs_secondcheck(Int *start_range,uint32_t a,uint32_t k_index,Int *privateke
 				 Q is the target Key
 		base_key is the Start range + a*BSGS_M
 	*/
-	BSGS_Q = secp->AddDirect(OriginalPointsBSGS[k_index],point_aux);
+	BSGS_Q = secp->AddDirect(target_point,point_aux);
 
 	do {
 		BSGS_Q_AMP = secp->AddDirect(BSGS_Q,BSGS_AMP2[i]);
@@ -4303,10 +4433,11 @@ int bsgs_secondcheck(Int *start_range,uint32_t a,uint32_t k_index,Int *privateke
 int bsgs_thirdcheck(Int *start_range,uint32_t a,uint32_t k_index,Int *privatekey)	{
 	uint64_t j = 0;
 	int i = 0,found = 0,r = 0;
-	Int base_key,calculatedkey;
+	Int base_key,calculatedkey,candidate_offset;
 	Point base_point,point_aux;
-	Point BSGS_Q, BSGS_S,BSGS_Q_AMP;
+	Point BSGS_Q, BSGS_Q_AMP;
 	char xpoint_raw[32];
+	Point &target_point = OriginalPointsBSGS[k_index];
 
 	base_key.SetInt32(a);
 	base_key.Mult(&BSGS_M2_double);
@@ -4315,7 +4446,7 @@ int bsgs_thirdcheck(Int *start_range,uint32_t a,uint32_t k_index,Int *privatekey
 	base_point = secp->ComputePublicKey(&base_key);
 	point_aux = secp->Negation(base_point);
 	
-	BSGS_Q = secp->AddDirect(OriginalPointsBSGS[k_index],point_aux);
+	BSGS_Q = secp->AddDirect(target_point,point_aux);
 	
 	do {
 		BSGS_Q_AMP = secp->AddDirect(BSGS_Q,BSGS_AMP3[i]);
@@ -4325,20 +4456,20 @@ int bsgs_thirdcheck(Int *start_range,uint32_t a,uint32_t k_index,Int *privatekey
 			r = bsgs_searchbinary(bPtable,xpoint_raw,bsgs_m3,&j);
 			if(r)	{
 				calcualteindex(i,&calculatedkey);
-				privatekey->Set(&calculatedkey);
-				privatekey->Add((uint64_t)(j+1));
+				candidate_offset.Set(&calculatedkey);
+				candidate_offset.Add((uint64_t)(j+1));
+				privatekey->Set(&candidate_offset);
 				privatekey->Add(&base_key);
 				point_aux = secp->ComputePublicKey(privatekey);
-				if(point_aux.x.IsEqual(&OriginalPointsBSGS[k_index].x))	{
+				if(point_aux.x.IsEqual(&target_point.x) && point_aux.y.IsEqual(&target_point.y))	{
 					found = 1;
 				}
 				else	{
-					calcualteindex(i,&calculatedkey);
 					privatekey->Set(&calculatedkey);
 					privatekey->Sub((uint64_t)(j+1));
 					privatekey->Add(&base_key);
 					point_aux = secp->ComputePublicKey(privatekey);
-					if(point_aux.x.IsEqual(&OriginalPointsBSGS[k_index].x))	{
+					if(point_aux.x.IsEqual(&target_point.x) && point_aux.y.IsEqual(&target_point.y))	{
 						found = 1;
 					}
 				}
@@ -4382,7 +4513,7 @@ void init_generator()	{
 	Point G = secp->ComputePublicKey(&stride);
 	Point g;
 	g.Set(G);
-	Gn.reserve(CPU_GRP_SIZE / 2);
+	Gn.resize(CPU_GRP_SIZE / 2);
 	Gn[0] = g;
 	g = secp->DoubleDirect(g);
 	Gn[1] = g;
@@ -4797,7 +4928,7 @@ void *thread_process_bsgs_dance(void *vargp)	{
 	char xpoint_raw[32],*aux_c,*hextemp;
 	Int base_key,keyfound,dy,dyn,_s,_p,km,intaux;
 	IntGroup *grp = new IntGroup(CPU_GRP_SIZE / 2 + 1);
-	uint32_t k,l,r,salir,thread_number,entrar,cycles;
+	uint32_t k,r,thread_number,entrar,cycles;
 	int hLength = (CPU_GRP_SIZE / 2 - 1);	
 
 	grp->Set(dx);
@@ -4805,6 +4936,7 @@ void *thread_process_bsgs_dance(void *vargp)	{
 	tt = (struct tothread *)vargp;
 	thread_number = tt->nt;
 	free(tt);
+	uint64_t rng_state = mix_u64((uint64_t)time(NULL) ^ ((uint64_t)thread_number << 32) ^ (uint64_t)(uintptr_t)&rng_state);
 	
 	cycles = bsgs_aux / 1024;
 	if(bsgs_aux % 1024 != 0)	{
@@ -4822,7 +4954,7 @@ void *thread_process_bsgs_dance(void *vargp)	{
 		while base_key is less than n_range_end then:
 	*/
 	do	{
-		r = rand() % 3;
+		r = thread_rng_next_bounded(&rng_state, 3);
 #if defined(_WIN64) && !defined(__CYGWIN__)
 	WaitForSingleObject(bsgs_thread, INFINITE);
 #else
@@ -4900,10 +5032,10 @@ void *thread_process_bsgs_dance(void *vargp)	{
 		point_aux = secp->ComputePublicKey(&km);
 		
 		for(k = 0; k < bsgs_point_number ; k++)	{
-			if(bsgs_found[k] == 0)	{
+			if(bsgs_found_load_relaxed(k) == 0)	{
 				startP  = secp->AddDirect(OriginalPointsBSGS[k],point_aux);
 				uint32_t j = 0;
-				while( j < cycles && bsgs_found[k]== 0 )	{
+				while( j < cycles && bsgs_found_load_relaxed(k) == 0 )	{
 				
 					int i;
 					
@@ -4990,7 +5122,7 @@ pn.y.ModAdd(&GSn[i].y);
 
 					pts[0] = pn;
 					
-					for(int i = 0; i<CPU_GRP_SIZE && bsgs_found[k]== 0; i++) {
+					for(int i = 0; i<CPU_GRP_SIZE && bsgs_found_load_relaxed(k) == 0; i++) {
 						pts[i].x.Get32Bytes((unsigned char*)xpoint_raw);
 						r = cuckoo_check(&cuckoo_bP[((unsigned char)xpoint_raw[0])],xpoint_raw,32);
 						if(r) {
@@ -5020,12 +5152,8 @@ pn.y.ModAdd(&GSn[i].y);
 								pthread_mutex_unlock(&write_keys);
 #endif
 
-								bsgs_found[k] = 1;
-								salir = 1;
-								for(l = 0; l < bsgs_point_number && salir; l++)	{
-									salir &= bsgs_found[l];
-								}
-								if(salir)	{
+								bsgs_found_store_release(k, 1);
+								if(all_bsgs_points_found())	{
 									printf("All points were found\n");
 									exit(EXIT_FAILURE);
 								}
@@ -5055,9 +5183,10 @@ pn.y.ModAdd(&GSn[i].y);
 				}//while all the aMP points
 			}// End if 
 		}
-		steps[thread_number]+=2;
+		steps_add_relaxed(thread_number, 2);
 	}while(1);
-	ends[thread_number] = 1;
+	delete grp;
+	ends_store_release(thread_number, 1);
 	return NULL;
 }
 
@@ -5071,7 +5200,7 @@ void *thread_process_bsgs_backward(void *vargp)	{
 	char xpoint_raw[32],*aux_c,*hextemp;
 	Int base_key,keyfound;
 	Point base_point,point_aux,point_found;
-	uint32_t k,l,r,salir,thread_number,entrar,cycles;
+	uint32_t k,r,thread_number,entrar,cycles;
 	
 	IntGroup *grp = new IntGroup(CPU_GRP_SIZE / 2 + 1);
 	Point startP;
@@ -5160,10 +5289,10 @@ void *thread_process_bsgs_backward(void *vargp)	{
 		point_aux = secp->ComputePublicKey(&km);
 		
 		for(k = 0; k < bsgs_point_number ; k++)	{
-			if(bsgs_found[k] == 0)	{
+			if(bsgs_found_load_relaxed(k) == 0)	{
 				startP  = secp->AddDirect(OriginalPointsBSGS[k],point_aux);
 				uint32_t j = 0;
-				while( j < cycles && bsgs_found[k]== 0 )	{
+				while( j < cycles && bsgs_found_load_relaxed(k) == 0 )	{
 					int i;
 					for(i = 0; i < hLength; i++) {
 						dx[i].ModSub(&GSn[i].x,&startP.x);
@@ -5248,7 +5377,7 @@ pn.y.ModAdd(&GSn[i].y);
 
 					pts[0] = pn;
 					
-					for(int i = 0; i<CPU_GRP_SIZE && bsgs_found[k]== 0; i++) {
+					for(int i = 0; i<CPU_GRP_SIZE && bsgs_found_load_relaxed(k) == 0; i++) {
 						pts[i].x.Get32Bytes((unsigned char*)xpoint_raw);
 						r = cuckoo_check(&cuckoo_bP[((unsigned char)xpoint_raw[0])],xpoint_raw,32);
 						if(r) {
@@ -5278,12 +5407,8 @@ pn.y.ModAdd(&GSn[i].y);
 								pthread_mutex_unlock(&write_keys);
 #endif
 
-								bsgs_found[k] = 1;
-								salir = 1;
-								for(l = 0; l < bsgs_point_number && salir; l++)	{
-									salir &= bsgs_found[l];
-								}
-								if(salir)	{
+								bsgs_found_store_release(k, 1);
+								if(all_bsgs_points_found())	{
 									printf("All points were found\n");
 									exit(EXIT_FAILURE);
 								}
@@ -5312,9 +5437,10 @@ pn.y.ModAdd(&GSn[i].y);
 				}//while all the aMP points
 			}// End if 
 		}
-		steps[thread_number]+=2;
+		steps_add_relaxed(thread_number, 2);
 	}while(1);
-	ends[thread_number] = 1;
+	delete grp;
+	ends_store_release(thread_number, 1);
 	return NULL;
 }
 
@@ -5328,7 +5454,7 @@ void *thread_process_bsgs_both(void *vargp)	{
 	char xpoint_raw[32],*aux_c,*hextemp;
 	Int base_key,keyfound;
 	Point base_point,point_aux,point_found;
-	uint32_t k,l,r,salir,thread_number,entrar,cycles;
+	uint32_t k,r,thread_number,entrar,cycles;
 	
 	IntGroup *grp = new IntGroup(CPU_GRP_SIZE / 2 + 1);
 	Point startP;
@@ -5351,6 +5477,7 @@ void *thread_process_bsgs_both(void *vargp)	{
 	tt = (struct tothread *)vargp;
 	thread_number = tt->nt;
 	free(tt);
+	uint64_t rng_state = mix_u64((uint64_t)time(NULL) ^ ((uint64_t)thread_number << 32) ^ (uint64_t)(uintptr_t)&rng_state);
 	
 	cycles = bsgs_aux / 1024;
 	if(bsgs_aux % 1024 != 0)	{
@@ -5368,7 +5495,7 @@ void *thread_process_bsgs_both(void *vargp)	{
 	*/
 	do	{
 
-		r = rand() % 2;
+		r = thread_rng_next_bounded(&rng_state, 2);
 #if defined(_WIN64) && !defined(__CYGWIN__)
 		WaitForSingleObject(bsgs_thread, INFINITE);
 #else
@@ -5444,10 +5571,10 @@ void *thread_process_bsgs_both(void *vargp)	{
 		point_aux = secp->ComputePublicKey(&km);
 		
 		for(k = 0; k < bsgs_point_number ; k++)	{
-			if(bsgs_found[k] == 0)	{
+			if(bsgs_found_load_relaxed(k) == 0)	{
 					startP  = secp->AddDirect(OriginalPointsBSGS[k],point_aux);
 					uint32_t j = 0;
-					while( j < cycles && bsgs_found[k]== 0 )	{
+					while( j < cycles && bsgs_found_load_relaxed(k) == 0 )	{
 						int i;
 						for(i = 0; i < hLength; i++) {
 							dx[i].ModSub(&GSn[i].x,&startP.x);
@@ -5532,7 +5659,7 @@ void *thread_process_bsgs_both(void *vargp)	{
 
 						pts[0] = pn;
 						
-						for(int i = 0; i<CPU_GRP_SIZE && bsgs_found[k]== 0; i++) {
+						for(int i = 0; i<CPU_GRP_SIZE && bsgs_found_load_relaxed(k) == 0; i++) {
 							pts[i].x.Get32Bytes((unsigned char*)xpoint_raw);
 							r = cuckoo_check(&cuckoo_bP[((unsigned char)xpoint_raw[0])],xpoint_raw,32);
 							if(r) {
@@ -5562,12 +5689,8 @@ void *thread_process_bsgs_both(void *vargp)	{
 									pthread_mutex_unlock(&write_keys);
 #endif
 
-									bsgs_found[k] = 1;
-									salir = 1;
-									for(l = 0; l < bsgs_point_number && salir; l++)	{
-										salir &= bsgs_found[l];
-									}
-									if(salir)	{
+									bsgs_found_store_release(k, 1);
+									if(all_bsgs_points_found())	{
 										printf("All points were found\n");
 										exit(EXIT_FAILURE);
 									}
@@ -5597,9 +5720,10 @@ void *thread_process_bsgs_both(void *vargp)	{
 					}//while all the aMP points
 			}// End if 
 		}
-		steps[thread_number]+=2;	
+		steps_add_relaxed(thread_number, 2);	
 	}while(1);
-	ends[thread_number] = 1;
+	delete grp;
+	ends_store_release(thread_number, 1);
 	return NULL;
 }
 

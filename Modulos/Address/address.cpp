@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <ctype.h>
 #include <math.h>
 #include <time.h>
 #include <vector>
@@ -404,6 +405,109 @@ Int lambda,lambda2,beta,beta2;
 
 Secp256K1 *secp;
 
+static inline uint64_t steps_load_relaxed(int index) {
+    return __atomic_load_n(&steps[index], __ATOMIC_RELAXED);
+}
+
+static inline void steps_add_relaxed(int index, uint64_t delta) {
+    __atomic_add_fetch(&steps[index], delta, __ATOMIC_RELAXED);
+}
+
+static inline unsigned int ends_load_acquire(int index) {
+    return __atomic_load_n(&ends[index], __ATOMIC_ACQUIRE);
+}
+
+static inline void ends_store_release(int index, unsigned int value) {
+    __atomic_store_n(&ends[index], value, __ATOMIC_RELEASE);
+}
+
+static inline bool equals_ignore_case(const char *a, const char *b) {
+    if (a == NULL || b == NULL) {
+        return false;
+    }
+    while (*a && *b) {
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) {
+            return false;
+        }
+        ++a;
+        ++b;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+static inline bool env_truthy(const char *value) {
+    if (value == NULL) {
+        return false;
+    }
+    return strcmp(value, "1") == 0
+        || equals_ignore_case(value, "true")
+        || equals_ignore_case(value, "yes")
+        || equals_ignore_case(value, "y")
+        || equals_ignore_case(value, "on");
+}
+
+static inline bool env_falsy(const char *value) {
+    if (value == NULL) {
+        return false;
+    }
+    return strcmp(value, "0") == 0
+        || equals_ignore_case(value, "false")
+        || equals_ignore_case(value, "no")
+        || equals_ignore_case(value, "n")
+        || equals_ignore_case(value, "off");
+}
+
+void snapshot_address_progress(Int *cursor, Int *range_end_snapshot, int *random_flag) {
+#if defined(_WIN64) && !defined(__CYGWIN__)
+    WaitForSingleObject(write_random, INFINITE);
+#else
+    pthread_mutex_lock(&write_random);
+#endif
+    cursor->Set(&n_range_start);
+    range_end_snapshot->Set(&n_range_end);
+    *random_flag = FLAGRANDOM;
+#if defined(_WIN64) && !defined(__CYGWIN__)
+    ReleaseMutex(write_random);
+#else
+    pthread_mutex_unlock(&write_random);
+#endif
+}
+
+bool claim_sequential_range_start(Int *dst) {
+    bool ok = false;
+#if defined(_WIN64) && !defined(__CYGWIN__)
+    WaitForSingleObject(write_random, INFINITE);
+#else
+    pthread_mutex_lock(&write_random);
+#endif
+    if (n_range_start.IsLower(&n_range_end)) {
+        dst->Set(&n_range_start);
+        n_range_start.Add(N_SEQUENTIAL_MAX);
+        ok = true;
+    }
+#if defined(_WIN64) && !defined(__CYGWIN__)
+    ReleaseMutex(write_random);
+#else
+    pthread_mutex_unlock(&write_random);
+#endif
+    return ok;
+}
+
+bool should_resume_address_checkpoint(const char *filename) {
+    const char *env = getenv("QCHAVES_AUTO_RESUME");
+    if (env_truthy(env)) {
+        printf("[+] Auto-resume habilitado por QCHAVES_AUTO_RESUME. Retomando %s\n", filename);
+        return true;
+    }
+    if (env_falsy(env)) {
+        printf("[i] Auto-resume desabilitado por QCHAVES_AUTO_RESUME. Ignorando %s\n", filename);
+        return false;
+    }
+    printf("[?] Checkpoint detectado: %s. Deseja retomar a busca? (s/n): ", filename);
+    int c = getchar();
+    return c == 's' || c == 'S';
+}
+
 void signal_handler(int sig) {
     if (sig == SIGINT) {
         printf("\n[!] Interrupção detectada. Salvando checkpoint...\n");
@@ -416,10 +520,16 @@ void save_checkpoint_address(int bits) {
     sprintf(filename, "address_bit%d.ckp", bits);
     FILE *f = fopen(filename, "wb");
     if (f) {
-        char *hextemp = n_range_start.GetBase16();
-        fprintf(f, "ADDR\n%d\n%s\n", bits, hextemp);
+        Int cursor;
+        Int range_end_snapshot;
+        int random_mode = 0;
+        snapshot_address_progress(&cursor, &range_end_snapshot, &random_mode);
+        char *cursor_hex = cursor.GetBase16();
+        char *range_end_hex = range_end_snapshot.GetBase16();
+        fprintf(f, "ADDR2\n%d\n%d\n%s\n%s\n", bits, random_mode, cursor_hex, range_end_hex);
         fclose(f);
-        free(hextemp);
+        free(cursor_hex);
+        free(range_end_hex);
     }
 }
 
@@ -428,17 +538,31 @@ bool load_checkpoint_address(int bits) {
     sprintf(filename, "address_bit%d.ckp", bits);
     FILE *f = fopen(filename, "rb");
     if (f) {
-        char magic[10], hex[128];
+        char magic[16] = {0};
+        char cursor_hex[128] = {0};
+        char range_end_hex[128] = {0};
         int fbits;
-        if (fscanf(f, "%s\n%d\n%s\n", magic, &fbits, hex) == 3) {
-            if (strcmp(magic, "ADDR") == 0 && fbits == bits) {
-                printf("[?] Checkpoint detectado: %s. Deseja retomar a busca? (s/n): ", filename);
-                char c = getchar();
-                if (c == 's' || c == 'S') {
-                    n_range_start.SetBase16(hex);
-                    printf("[+] Retomando da posição: 0x%s\n", hex);
-                    fclose(f);
-                    return true;
+        int random_mode = 0;
+        if (fscanf(f, "%15s", magic) == 1) {
+            if (strcmp(magic, "ADDR2") == 0) {
+                if (fscanf(f, "%d\n%d\n%127s\n%127s\n", &fbits, &random_mode, cursor_hex, range_end_hex) == 4 && fbits == bits) {
+                    if (should_resume_address_checkpoint(filename)) {
+                        n_range_start.SetBase16(cursor_hex);
+                        n_range_end.SetBase16(range_end_hex);
+                        FLAGRANDOM = random_mode;
+                        printf("[+] Retomando da posição: 0x%s\n", cursor_hex);
+                        fclose(f);
+                        return true;
+                    }
+                }
+            } else if (strcmp(magic, "ADDR") == 0) {
+                if (fscanf(f, "%d\n%127s\n", &fbits, cursor_hex) == 2 && fbits == bits) {
+                    if (should_resume_address_checkpoint(filename)) {
+                        n_range_start.SetBase16(cursor_hex);
+                        printf("[+] Retomando da posição: 0x%s\n", cursor_hex);
+                        fclose(f);
+                        return true;
+                    }
                 }
             }
         }
@@ -1027,7 +1151,7 @@ int main(int argc, char **argv)	{
 		}
 		bsgs_found = (int*) calloc(N,sizeof(int));
 		checkpointer((void *)bsgs_found,__FILE__,"calloc","bsgs_found" ,__LINE__ -1 );
-		OriginalPointsBSGS.reserve(N);
+		OriginalPointsBSGS.resize(N);
 		OriginalPointsBSGScompressed = (bool*) malloc(N*sizeof(bool));
 		checkpointer((void *)OriginalPointsBSGScompressed,__FILE__,"malloc","OriginalPointsBSGScompressed" ,__LINE__ -1 );
 		pointx_str = (char*) malloc(65);
@@ -1354,9 +1478,9 @@ int main(int argc, char **argv)	{
 		BSGS_MP3 = secp->ComputePublicKey(&BSGS_M3);
 		BSGS_MP3_double = secp->ComputePublicKey(&BSGS_M3_double);
 		
-		BSGS_AMP2.reserve(32);
-		BSGS_AMP3.reserve(32);
-		GSn.reserve(CPU_GRP_SIZE/2);
+		BSGS_AMP2.resize(32);
+		BSGS_AMP3.resize(32);
+		GSn.resize(CPU_GRP_SIZE/2);
 
 		i= 0;
 
@@ -2156,7 +2280,7 @@ int main(int argc, char **argv)	{
 
 		check_flag = 1;
 		for(j = 0; j <NTHREADS && check_flag; j++) {
-			check_flag &= ends[j];
+			check_flag &= ends_load_acquire(j);
 		}
 		if(check_flag)	{
 			continue_flag = 0;
@@ -2168,7 +2292,7 @@ int main(int argc, char **argv)	{
 				total.SetInt32(0);
 				for(j = 0; j < NTHREADS; j++) {
 					pretotal.Set(&debugcount_mpz);
-					pretotal.Mult(steps[j]);					
+					pretotal.Mult(steps_load_relaxed(j));					
 					total.Add(&pretotal);
 				}
 				
@@ -2309,29 +2433,22 @@ char *pubkeytopubaddress(char *pkey,int length)	{
 }
 
 int searchbinary(struct address_value *buffer,char *data,int64_t array_length) {
-	int64_t half,min,max,current;
-	int r = 0,rcmp;
-	min = 0;
-	current = 0;
-	max = array_length;
-	half = array_length;
-	while(!r && half >= 1) {
-		half = (max - min)/2;
-		rcmp = memcmp(data,buffer[current+half].value,20);
-		if(rcmp == 0)	{
-			r = 1;	//Found!!
+	int64_t left = 0;
+	int64_t right = array_length;
+	while(left < right) {
+		const int64_t mid = left + ((right - left) >> 1);
+		const int cmp = memcmp(data, buffer[mid].value, 20);
+		if(cmp == 0) {
+			return 1;
+		}
+		if(cmp < 0) {
+			right = mid;
 		}
 		else	{
-			if(rcmp < 0) { //data < temp_read
-				max = (max-half);
-			}
-			else	{ // data > temp_read
-				min = (min+half);
-			}
-			current = min;
+			left = mid + 1;
 		}
 	}
-	return r;
+	return 0;
 }
 
 #if defined(_WIN64) && !defined(__CYGWIN__)
@@ -2496,7 +2613,7 @@ void *thread_process_minikeys(void *vargp)	{
 						}
 					}
 				}
-				steps[thread_number]++;
+				steps_add_relaxed(thread_number, 1);
 				count+=1024;
 			}while(count < N_SEQUENTIAL_MAX && continue_flag);
 		}
@@ -2548,11 +2665,13 @@ void *thread_process(void *vargp)	{
 	const int  loc_crypto  = FLAGCRYPTO;
 	const int  loc_endo    = FLAGENDOMORPHISM;
 	const int  loc_maxlen  = MAXLENGTHADDRESS;
+	const bool loc_is_btc  = (loc_crypto == CRYPTO_BTC);
+	const bool loc_is_eth  = (loc_crypto == CRYPTO_ETH);
+	const bool do_compress = (loc_search == SEARCH_COMPRESS || loc_search == SEARCH_BOTH);
+	const bool do_uncompress = (loc_search == SEARCH_UNCOMPRESS || loc_search == SEARCH_BOTH);
 
 	/* ── Opt 3: const bool permite eliminar if(false) pelo compilador ─── */
-	const bool calculate_y = (loc_search == SEARCH_UNCOMPRESS)
-	                      || (loc_search == SEARCH_BOTH)
-	                      || (loc_crypto == CRYPTO_ETH);
+	const bool calculate_y = do_uncompress || loc_is_eth;
 
 	Int key_mpz,keyfound,temp_stride;
 	tt = (struct tothread *)vargp;
@@ -2565,20 +2684,7 @@ void *thread_process(void *vargp)	{
 			key_mpz.Rand(&n_range_start,&n_range_end);
 		}
 		else	{
-			if(n_range_start.IsLower(&n_range_end))	{
-#if defined(_WIN64) && !defined(__CYGWIN__)
-				WaitForSingleObject(write_random, INFINITE);
-				key_mpz.Set(&n_range_start);
-				n_range_start.Add(N_SEQUENTIAL_MAX);
-				ReleaseMutex(write_random);
-#else
-				pthread_mutex_lock(&write_random);
-				key_mpz.Set(&n_range_start);
-				n_range_start.Add(N_SEQUENTIAL_MAX);
-				pthread_mutex_unlock(&write_random);
-#endif
-			}
-			else	{
+			if(!claim_sequential_range_start(&key_mpz)) {
 				continue_flag = 0;
 			}
 		}
@@ -2736,12 +2842,62 @@ void *thread_process(void *vargp)	{
 				   Agora: um único loop faz compute+check por slot j, sem repetição.
 				   ────────────────────────────────────────────────────────────────── */
 				for(j = 0; j < CPU_GRP_SIZE/4;j++){
+					if((loc_mode == MODE_RMD160 || loc_mode == MODE_ADDRESS) && loc_is_btc && !loc_endo) {
+						if(do_compress) {
+							secp->GetHash160_fromX(P2PKH,0x02,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[0][0],(uint8_t*)publickeyhashrmd160_endomorphism[0][1],(uint8_t*)publickeyhashrmd160_endomorphism[0][2],(uint8_t*)publickeyhashrmd160_endomorphism[0][3]);
+							secp->GetHash160_fromX(P2PKH,0x03,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[1][0],(uint8_t*)publickeyhashrmd160_endomorphism[1][1],(uint8_t*)publickeyhashrmd160_endomorphism[1][2],(uint8_t*)publickeyhashrmd160_endomorphism[1][3]);
+						}
+						if(do_uncompress) {
+							secp->GetHash160(P2PKH,false,pts[(j*4)],pts[(j*4)+1],pts[(j*4)+2],pts[(j*4)+3],(uint8_t*)publickeyhashrmd160_uncompress[0],(uint8_t*)publickeyhashrmd160_uncompress[1],(uint8_t*)publickeyhashrmd160_uncompress[2],(uint8_t*)publickeyhashrmd160_uncompress[3]);
+						}
+
+						for(k = 0; k < 4; k++) {
+							if(do_compress) {
+								for(l = 0; l < 2; l++) {
+									r = cuckoo_check(&cuckoo,publickeyhashrmd160_endomorphism[l][k],loc_maxlen);
+									if(r) {
+										r = searchbinary(addressTable,publickeyhashrmd160_endomorphism[l][k],N);
+										if(r) {
+											keyfound.SetInt32(k);
+											keyfound.Mult(&stride);
+											keyfound.Add(&key_mpz);
+											publickey = secp->ComputePublicKey(&keyfound);
+											secp->GetHash160(P2PKH,true,publickey,(uint8_t*)publickeyhashrmd160);
+											if(memcmp(publickeyhashrmd160_endomorphism[l][k],publickeyhashrmd160,20) != 0)	{
+												keyfound.Neg();
+												keyfound.Add(&secp->order);
+											}
+											writekey(true,&keyfound);
+										}
+									}
+								}
+							}
+							if(do_uncompress) {
+								r = cuckoo_check(&cuckoo,publickeyhashrmd160_uncompress[k],loc_maxlen);
+								if(r) {
+									r = searchbinary(addressTable,publickeyhashrmd160_uncompress[k],N);
+									if(r) {
+										keyfound.SetInt32(k);
+										keyfound.Mult(&stride);
+										keyfound.Add(&key_mpz);
+										writekey(false,&keyfound);
+									}
+								}
+							}
+						}
+						count+=4;
+						temp_stride.SetInt32(4);
+						temp_stride.Mult(&stride);
+						key_mpz.Add(&temp_stride);
+						continue;
+					}
+
 					switch(loc_mode)	{
 						case MODE_RMD160:
 						case MODE_ADDRESS:
-							if(loc_crypto == CRYPTO_BTC){
+							if(loc_is_btc){
 								
-								if(loc_search == SEARCH_COMPRESS || loc_search == SEARCH_BOTH ){
+								if(do_compress){
 									if(loc_endo)	{
 										secp->GetHash160_fromX(P2PKH,0x02,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[0][0],(uint8_t*)publickeyhashrmd160_endomorphism[0][1],(uint8_t*)publickeyhashrmd160_endomorphism[0][2],(uint8_t*)publickeyhashrmd160_endomorphism[0][3]);
 										secp->GetHash160_fromX(P2PKH,0x03,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[1][0],(uint8_t*)publickeyhashrmd160_endomorphism[1][1],(uint8_t*)publickeyhashrmd160_endomorphism[1][2],(uint8_t*)publickeyhashrmd160_endomorphism[1][3]);
@@ -2758,7 +2914,7 @@ void *thread_process(void *vargp)	{
 									}
 									
 								}
-								if(loc_search == SEARCH_UNCOMPRESS || loc_search == SEARCH_BOTH){
+								if(do_uncompress){
 									if(loc_endo)	{
 										for(l = 0; l < 4; l++)	{
 											endomorphism_negeted_point[l] = secp->Negation(pts[(j*4)+l]);
@@ -2784,7 +2940,7 @@ void *thread_process(void *vargp)	{
 									}
 								}
 							}								
-							else if(loc_crypto == CRYPTO_ETH){
+							else if(loc_is_eth){
 								if(loc_endo)	{
 									for(k = 0; k < 4;k++)	{
 										endomorphism_negeted_point[k] = secp->Negation(pts[(j*4)+k]);
@@ -2794,7 +2950,7 @@ void *thread_process(void *vargp)	{
 										generate_binaddress_eth(endomorphism_beta[(4*j)+k],(uint8_t*)publickeyhashrmd160_endomorphism[2][k]);
 										generate_binaddress_eth(endomorphism_negeted_point[k],(uint8_t*)publickeyhashrmd160_endomorphism[3][k]);
 										endomorphism_negeted_point[k] = secp->Negation(endomorphism_beta2[(j*4)+k]);
-										generate_binaddress_eth(endomorphism_beta[(4*j)+k],(uint8_t*)publickeyhashrmd160_endomorphism[4][k]);
+										generate_binaddress_eth(endomorphism_beta2[(4*j)+k],(uint8_t*)publickeyhashrmd160_endomorphism[4][k]);
 										generate_binaddress_eth(endomorphism_negeted_point[k],(uint8_t*)publickeyhashrmd160_endomorphism[5][k]);
 									}
 								}
@@ -2812,10 +2968,10 @@ void *thread_process(void *vargp)	{
 					switch(loc_mode)	{
 						case MODE_RMD160:
 						case MODE_ADDRESS:
-							if( loc_crypto  == CRYPTO_BTC) {
+							if(loc_is_btc) {
 								
 								for(k = 0; k < 4;k++)	{
-									if(loc_search == SEARCH_COMPRESS || loc_search == SEARCH_BOTH){
+									if(do_compress){
 										if(loc_endo)	{
 											for(l = 0;l < 6; l++)	{
 												r = cuckoo_check(&cuckoo,publickeyhashrmd160_endomorphism[l][k],loc_maxlen);
@@ -2902,7 +3058,7 @@ void *thread_process(void *vargp)	{
 										}
 									}
 
-									if(loc_search == SEARCH_UNCOMPRESS || loc_search == SEARCH_BOTH)	{
+									if(do_uncompress)	{
 										if(loc_endo)	{
 											for(l = 6;l < 12; l++)	{	//We check the array from 6 to 12(excluded) because we save the uncompressed information there
 												r = cuckoo_check(&cuckoo,publickeyhashrmd160_endomorphism[l][k],loc_maxlen);	//Check in Cuckoo filter
@@ -2963,7 +3119,7 @@ void *thread_process(void *vargp)	{
 									}
 								}
 							}
-							else if( loc_crypto == CRYPTO_ETH) {
+							else if(loc_is_eth) {
 								if(loc_endo)	{
 									for(k = 0; k < 4;k++)	{
 										for(l = 0;l < 6; l++)	{
@@ -3098,7 +3254,7 @@ void *thread_process(void *vargp)	{
 				}
 				*/
 
-				steps[thread_number]++;
+				steps_add_relaxed(thread_number, 1);
 
 				// Next start point (startP + GRP_SIZE*G)
 				pp = startP;
@@ -3119,7 +3275,8 @@ void *thread_process(void *vargp)	{
 			}while(count < N_SEQUENTIAL_MAX && continue_flag);
 		}
 	} while(continue_flag);
-	ends[thread_number] = 1;
+	delete grp;
+	ends_store_release(thread_number, 1);
 	return NULL;
 }
 
@@ -3184,20 +3341,7 @@ void *thread_process_vanity(void *vargp)	{
 			key_mpz.Rand(&n_range_start,&n_range_end);
 		}
 		else	{
-			if(n_range_start.IsLower(&n_range_end))	{
-#if defined(_WIN64) && !defined(__CYGWIN__)
-				WaitForSingleObject(write_random, INFINITE);
-				key_mpz.Set(&n_range_start);
-				n_range_start.Add(N_SEQUENTIAL_MAX);
-				ReleaseMutex(write_random);
-#else
-				pthread_mutex_lock(&write_random);
-				key_mpz.Set(&n_range_start);
-				n_range_start.Add(N_SEQUENTIAL_MAX);
-				pthread_mutex_unlock(&write_random);
-#endif
-			}
-			else	{
+			if(!claim_sequential_range_start(&key_mpz)) {
 				continue_flag = 0;
 			}
 		}
@@ -3535,7 +3679,7 @@ void *thread_process_vanity(void *vargp)	{
 					temp_stride.Mult(&stride);
 					key_mpz.Add(&temp_stride);
 				}
-				steps[thread_number]++;
+				steps_add_relaxed(thread_number, 1);
 
 				// Next start point (startP + GRP_SIZE*G)
 				pp = startP;
@@ -3556,7 +3700,8 @@ void *thread_process_vanity(void *vargp)	{
 			}while(count < N_SEQUENTIAL_MAX && continue_flag);
 		}
 	} while(continue_flag);
-	ends[thread_number] = 1;
+	delete grp;
+	ends_store_release(thread_number, 1);
 	return NULL;
 }
 
@@ -4027,9 +4172,10 @@ pn.y.ModAdd(&GSn[i].y);
 				} // end while
 			}// End if 
 		}
-		steps[thread_number]+=2;
+		steps_add_relaxed(thread_number, 2);
 	}while(1);
-	ends[thread_number] = 1;
+	delete grp;
+	ends_store_release(thread_number, 1);
 	return NULL;
 }
 
@@ -4282,9 +4428,10 @@ pn.y.ModAdd(&GSn[i].y);
 			}	//End if
 		} // End for with k bsgs_point_number
 
-		steps[thread_number]+=2;
+		steps_add_relaxed(thread_number, 2);
 	}while(1);
-	ends[thread_number] = 1;
+	delete grp;
+	ends_store_release(thread_number, 1);
 	return NULL;
 }
 
@@ -4412,7 +4559,7 @@ void init_generator()	{
 	Point G = secp->ComputePublicKey(&stride);
 	Point g;
 	g.Set(G);
-	Gn.reserve(CPU_GRP_SIZE / 2);
+	Gn.resize(CPU_GRP_SIZE / 2);
 	Gn[0] = g;
 	g = secp->DoubleDirect(g);
 	Gn[1] = g;
@@ -5085,9 +5232,10 @@ pn.y.ModAdd(&GSn[i].y);
 				}//while all the aMP points
 			}// End if 
 		}
-		steps[thread_number]+=2;
+		steps_add_relaxed(thread_number, 2);
 	}while(1);
-	ends[thread_number] = 1;
+	delete grp;
+	ends_store_release(thread_number, 1);
 	return NULL;
 }
 
@@ -5342,9 +5490,10 @@ pn.y.ModAdd(&GSn[i].y);
 				}//while all the aMP points
 			}// End if 
 		}
-		steps[thread_number]+=2;
+		steps_add_relaxed(thread_number, 2);
 	}while(1);
-	ends[thread_number] = 1;
+	delete grp;
+	ends_store_release(thread_number, 1);
 	return NULL;
 }
 
@@ -5627,9 +5776,10 @@ void *thread_process_bsgs_both(void *vargp)	{
 					}//while all the aMP points
 			}// End if 
 		}
-		steps[thread_number]+=2;	
+		steps_add_relaxed(thread_number, 2);	
 	}while(1);
-	ends[thread_number] = 1;
+	delete grp;
+	ends_store_release(thread_number, 1);
 	return NULL;
 }
 

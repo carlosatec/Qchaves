@@ -41,6 +41,9 @@ Cada módulo gera um binário independente padronizado com o prefixo `modo-`. Pa
 O motor de busca por endereços clássico, agora refatorado para performance extrema (**v2.1**).
 - **Busca Incremental:** Otimizado com `startP` incremental (+20-40% de boost), eliminando multiplicações escalares redundantes.
 - **Fused Hot Loop:** Lógica de hashing e verificação fundida em um único ciclo, minimizando *branch mispredictions*.
+- **Checkpoint Revisado:** O formato atual salva cursor, `range_end` e modo randômico com compatibilidade legada.
+- **Correções Estruturais:** Remoção de UB em vetores BSGS internos, correções de concorrência em `steps/ends` e cleanup de workers.
+- **Hot Path BTC Melhorado:** Caminho comum `BTC + !endomorphism` foi simplificado para reduzir branches por batch.
 - **Uso ideal:** Quando você tem uma lista de endereços Bitcoin (1...) e quer testar grandes intervalos sequenciais ou randômicos.
 - **Exemplo (Puzzle 21):**
   ```bash
@@ -49,6 +52,9 @@ O motor de busca por endereços clássico, agora refatorado para performance ext
 
 ### 👶 2. BSGS Engine (`modo-bsgs`)
 Implementação do algoritmo *Baby-step Giant-step*.
+- **Checkpoint Revisado:** O formato atual salva range e progresso global do BSGS com compatibilidade para checkpoint legado.
+- **Validação Final Endurecida:** A confirmação final passou a comparar o ponto completo, não apenas `x`.
+- **Workers Mais Seguros:** Melhorias de concorrência em `steps/ends`, `bsgs_found` com visibilidade mais consistente e RNG local por thread nos modos randômicos.
 - **Uso ideal:** Encontrar chaves em intervalos conhecidos com velocidade astronômica. Requer RAM.
 - **Exemplo (Puzzle 66):**
   ```bash
@@ -64,11 +70,15 @@ Motor de alta performance baseado no algoritmo *Pollard's Kangaroo*, agora total
 - **Checkpoint Portátil v3**: Salva e retoma o estado da frota, traps em RAM e parâmetros ativos de tuning.
 - **Archive por Shard**: Descarrega armadilhas excedentes para arquivos `traps_archive_shard_*.bin`, reduzindo custo do caminho de disco.
 - **Tuning em Runtime**: Permite ajustar saltos ativos com `-j` e a quantidade de kangaroos `wild` com `-w`.
+- **Auto-Tuning V1**: Suporta `--auto`, `--auto=safe`, `--auto=balanced` e `--auto=max`, detectando threads, RAM e WSL para sugerir `-t`, `-d`, `-m`, `-j` e `-w`.
 - **Hot Path Otimizado**: Distâncias saíram do GMP no loop principal e o cache afim foi reaproveitado para reduzir custo por hop.
 - **Uso ideal**: O melhor para ranges gigantes (ex: puzzles 100+) onde o BSGS consumiria RAM impossível.
 - **Exemplo (Puzzle 130):**
   ```bash
   ./kangaroo/modo-kangaroo -p <PUBKEY_HEX> -b 130 -r 0:FFFFFFFFFFFFFFFF -t 12 -d 22 -j 48 -w 40
+  ```
+  ```bash
+  ./kangaroo/modo-kangaroo --auto=balanced -p <PUBKEY_HEX> -b 130 -r 0:FFFFFFFFFFFFFFFF
   ```
 
 ---
@@ -84,6 +94,7 @@ Implementamos um sistema de persistência robusto e interativo em todos os motor
    - `kangaroo_bit66.ckp`
 2. **Retomada de Checkpoint**:
    - `modo-address` e `modo-bsgs` mantêm o fluxo interativo de confirmação ao detectar checkpoint compatível.
+   - `modo-address` e `modo-bsgs` também aceitam retomada não interativa via `QCHAVES_AUTO_RESUME=1` ou descarte automático via `QCHAVES_AUTO_RESUME=0`.
    - `modo-kangaroo` carrega automaticamente checkpoints compatíveis do formato atual.
 3. **Resiliência de Energia (Auto-Save)**: O progresso é salvo automaticamente a cada **5 minutos**.
 4. **Interrupção Segura (Ctrl+C)**: Todos os módulos capturam o sinal de interrupção e realizam um salvamento de emergência do estado exato antes de fechar.
@@ -126,6 +137,7 @@ Aqui estão os detalhes técnicos dos comandos mais utilizados:
 | **`-s`** | **Stats Interval**: Frequência de atualização (em segundos). | `-s 10` (Atualiza a cada 10s) |
 | **`-j`** | **Active Jumps**: Número de saltos ativos do Kangaroo. | `-j 48` |
 | **`-w`** | **Active Wild**: Número de kangaroos `wild` na frota do Kangaroo. | `-w 40` |
+| **`--auto`** | **Auto Profile**: Aplica tuning automático por hardware no Kangaroo. | `--auto=balanced` |
 
 ### 🛠️ Configurando Performance e Memória
 
@@ -134,6 +146,31 @@ O desempenho dos motores depende diretamente da configuração dos parâmetros `
 #### 1. Parâmetro `-t` (Threads)
 Defina `-t` conforme o número de threads do seu processador. Para saber quantos núcleos você tem, use `nproc` no WSL.
 - Exemplo: Se você tem um processador com 16 threads, use `-t 16`.
+
+#### 1.1 Auto-Tuning inicial do Kangaroo
+O `modo-kangaroo` já suporta uma V1 de autodetecção de hardware:
+- `--auto`
+- `--auto=safe`
+- `--auto=balanced`
+- `--auto=max`
+
+O motor detecta:
+- threads lógicas;
+- RAM total;
+- RAM disponível;
+- ambiente WSL.
+
+Os valores escolhidos automaticamente podem preencher:
+- `-t`
+- `-d`
+- `-m`
+- `-j`
+- `-w`
+
+Overrides manuais sempre vencem. Exemplo:
+```bash
+./kangaroo/modo-kangaroo --auto=max -t 8 -p <PUBKEY_HEX> -r <START:END>
+```
 
 #### 2. Parâmetro `-k` (Memory Factor) e `-n` (N-Sequential)
 

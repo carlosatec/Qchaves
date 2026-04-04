@@ -8,10 +8,12 @@
 #include <thread>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cctype>
 #include <limits>
 #include <getopt.h>
 #include <unistd.h>
@@ -149,6 +151,225 @@ std::string RANGE_END = "";
 std::string TARGET_PUBKEY_HEX = "";
 int ACTIVE_JUMP_COUNT = JUMP_COUNT;
 int ACTIVE_WILD_COUNT = HALF_FLEET;
+bool FLAG_AUTO_PROFILE = false;
+std::string AUTO_PROFILE_MODE = "balanced";
+bool OVERRIDE_THREADS = false;
+bool OVERRIDE_DP = false;
+bool OVERRIDE_RAM = false;
+bool OVERRIDE_JUMPS = false;
+bool OVERRIDE_WILD = false;
+
+struct HardwareProfile {
+    int logical_threads;
+    double total_ram_gb;
+    double available_ram_gb;
+    bool is_wsl;
+    bool is_windows;
+    bool is_linux;
+};
+
+struct KangarooAutoConfig {
+    int threads;
+    int dp_bits;
+    double ram_gb;
+    int jumps;
+    int wild;
+    const char* profile_name;
+};
+
+static inline bool equals_ignore_case(const char* a, const char* b) {
+    if (a == nullptr || b == nullptr) {
+        return false;
+    }
+    while (*a && *b) {
+        if (std::tolower(static_cast<unsigned char>(*a)) != std::tolower(static_cast<unsigned char>(*b))) {
+            return false;
+        }
+        ++a;
+        ++b;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+double read_meminfo_value_gb(const char* key) {
+    FILE* f = fopen("/proc/meminfo", "r");
+    if (!f) {
+        return 0.0;
+    }
+    char name[64];
+    unsigned long long kb = 0;
+    char unit[32];
+    while (fscanf(f, "%63[^:]: %llu %31s\n", name, &kb, unit) == 3) {
+        if (strcmp(name, key) == 0) {
+            fclose(f);
+            return static_cast<double>(kb) / 1048576.0;
+        }
+    }
+    fclose(f);
+    return 0.0;
+}
+
+bool detect_wsl() {
+    if (getenv("WSL_INTEROP") != nullptr || getenv("WSL_DISTRO_NAME") != nullptr) {
+        return true;
+    }
+    FILE* f = fopen("/proc/version", "r");
+    if (!f) {
+        return false;
+    }
+    char buffer[512];
+    const bool ok = fgets(buffer, sizeof(buffer), f) != nullptr &&
+        (strstr(buffer, "Microsoft") != nullptr || strstr(buffer, "WSL") != nullptr);
+    fclose(f);
+    return ok;
+}
+
+HardwareProfile detect_hardware_profile() {
+    HardwareProfile hw{};
+    hw.logical_threads = std::max(1u, std::thread::hardware_concurrency());
+#if defined(_WIN32) && !defined(__CYGWIN__)
+    hw.is_windows = true;
+    hw.is_linux = false;
+    hw.is_wsl = false;
+    MEMORYSTATUSEX mem_status;
+    memset(&mem_status, 0, sizeof(mem_status));
+    mem_status.dwLength = sizeof(mem_status);
+    if (GlobalMemoryStatusEx(&mem_status)) {
+        hw.total_ram_gb = static_cast<double>(mem_status.ullTotalPhys) / 1073741824.0;
+        hw.available_ram_gb = static_cast<double>(mem_status.ullAvailPhys) / 1073741824.0;
+    }
+#else
+    hw.is_windows = false;
+    hw.is_linux = true;
+    hw.is_wsl = detect_wsl();
+    const long page_size = sysconf(_SC_PAGESIZE);
+    const long phys_pages = sysconf(_SC_PHYS_PAGES);
+    if (page_size > 0 && phys_pages > 0) {
+        hw.total_ram_gb = (static_cast<double>(page_size) * static_cast<double>(phys_pages)) / 1073741824.0;
+    }
+    hw.available_ram_gb = read_meminfo_value_gb("MemAvailable");
+    if (hw.available_ram_gb <= 0.0) {
+        hw.available_ram_gb = read_meminfo_value_gb("MemFree");
+    }
+#endif
+    if (hw.total_ram_gb <= 0.0) {
+        hw.total_ram_gb = 4.0;
+    }
+    if (hw.available_ram_gb <= 0.0) {
+        hw.available_ram_gb = std::max(1.0, hw.total_ram_gb * 0.5);
+    }
+    return hw;
+}
+
+double compute_safe_ram_gb(const HardwareProfile& hw, const char* profile_name) {
+    double available_factor = 0.60;
+    double total_factor = 0.50;
+    if (equals_ignore_case(profile_name, "safe")) {
+        available_factor = 0.45;
+        total_factor = 0.35;
+    } else if (equals_ignore_case(profile_name, "max")) {
+        available_factor = 0.75;
+        total_factor = 0.65;
+    }
+    if (hw.is_wsl) {
+        available_factor -= 0.10;
+        total_factor -= 0.10;
+    }
+    available_factor = std::max(0.20, available_factor);
+    total_factor = std::max(0.20, total_factor);
+    return std::max(0.5, std::min(hw.available_ram_gb * available_factor, hw.total_ram_gb * total_factor));
+}
+
+KangarooAutoConfig compute_kangaroo_auto_config(const HardwareProfile& hw, const std::string& profile_mode) {
+    KangarooAutoConfig cfg{};
+    cfg.profile_name = profile_mode.c_str();
+
+    if (equals_ignore_case(profile_mode.c_str(), "safe")) {
+        cfg.threads = std::max(1, hw.logical_threads / 2);
+        cfg.jumps = 32;
+        cfg.wild = 24;
+    } else if (equals_ignore_case(profile_mode.c_str(), "max")) {
+        cfg.threads = std::max(1, hw.logical_threads);
+        cfg.jumps = 64;
+        cfg.wild = 40;
+    } else {
+        cfg.threads = hw.logical_threads > 4 ? hw.logical_threads - 1 : hw.logical_threads;
+        cfg.jumps = 48;
+        cfg.wild = 32;
+    }
+
+    cfg.threads = std::max(1, std::min(cfg.threads, 256));
+    cfg.ram_gb = compute_safe_ram_gb(hw, profile_mode.c_str());
+    cfg.ram_gb = std::max(0.5, std::floor(cfg.ram_gb * 2.0) / 2.0);
+    cfg.jumps = std::max(1, std::min(cfg.jumps, JUMP_COUNT));
+    cfg.wild = std::max(0, std::min(cfg.wild, FLEET_SIZE));
+
+    if (cfg.ram_gb >= 24.0) {
+        cfg.dp_bits = 23;
+    } else if (cfg.ram_gb >= 12.0) {
+        cfg.dp_bits = 22;
+    } else if (cfg.ram_gb >= 6.0) {
+        cfg.dp_bits = 21;
+    } else {
+        cfg.dp_bits = 20;
+    }
+
+    if (equals_ignore_case(profile_mode.c_str(), "safe")) {
+        cfg.dp_bits = std::max(cfg.dp_bits, 22);
+    } else if (equals_ignore_case(profile_mode.c_str(), "max")) {
+        cfg.dp_bits = std::max(20, cfg.dp_bits - 1);
+    }
+    cfg.dp_bits = std::max(1, std::min(cfg.dp_bits, 64));
+    return cfg;
+}
+
+void apply_auto_profile_if_needed() {
+    if (!FLAG_AUTO_PROFILE) {
+        return;
+    }
+    const HardwareProfile hw = detect_hardware_profile();
+    const KangarooAutoConfig cfg = compute_kangaroo_auto_config(hw, AUTO_PROFILE_MODE);
+
+    if (!OVERRIDE_THREADS) {
+        N_THREADS = cfg.threads;
+    }
+    if (!OVERRIDE_DP) {
+        const int bits = cfg.dp_bits;
+        if (bits <= 0) {
+            DP_MASK = 0;
+        } else if (bits == 64) {
+            DP_MASK = ~0ULL;
+        } else {
+            DP_MASK = ~((1ULL << (64 - bits)) - 1);
+        }
+    }
+    if (!OVERRIDE_RAM) {
+        MAX_RAM_GB = cfg.ram_gb;
+    }
+    if (!OVERRIDE_JUMPS) {
+        ACTIVE_JUMP_COUNT = cfg.jumps;
+    }
+    if (!OVERRIDE_WILD) {
+        ACTIVE_WILD_COUNT = cfg.wild;
+    }
+
+    printf("[i] Hardware detectado: threads=%d | RAM total=%.1f GB | RAM disponivel=%.1f GB | %s%s\n",
+           hw.logical_threads,
+           hw.total_ram_gb,
+           hw.available_ram_gb,
+           hw.is_wsl ? "WSL " : "",
+           hw.is_windows ? "Windows" : "Linux");
+    printf("[i] Auto profile (%s): -t %d -d %d -m %.1f -j %d -w %d\n",
+           AUTO_PROFILE_MODE.c_str(),
+           cfg.threads,
+           cfg.dp_bits,
+           cfg.ram_gb,
+           cfg.jumps,
+           cfg.wild);
+    if (OVERRIDE_THREADS || OVERRIDE_DP || OVERRIDE_RAM || OVERRIDE_JUMPS || OVERRIDE_WILD) {
+        printf("[i] Overrides manuais preservados para flags explicitas.\n");
+    }
+}
 
 void save_checkpoint();
 bool load_checkpoint();
@@ -551,6 +772,7 @@ void menu() {
     printf("Modo Kangaroo Standalone v2.0\n");
     printf("Uso: ./modo-kangaroo [opcoes]\n");
     printf("Opcoes:\n");
+    printf("  --auto[=perfil]  Auto-detecta hardware e aplica tuning (safe|balanced|max)\n");
     printf("  -r <START:END>   Intervalo de busca em Hex (Ex: 1:FFFFFFFF)\n");
     printf("  -p <PUBKEY>      Chave Publica alvo em Hex (Comprimida ou Uncomprimida)\n");
     printf("  -t <threads>     Numero de threads (Default: 1)\n");
@@ -1416,8 +1638,21 @@ int main(int argc, char** argv) {
     signal(SIGINT, signal_handler);
 
     int c;
-    while ((c = getopt(argc, argv, "hr:p:t:d:m:b:j:w:")) != -1) {
+    static struct option long_options[] = {
+        {"auto", optional_argument, nullptr, 1000},
+        {"help", no_argument, nullptr, 'h'},
+        {nullptr, 0, nullptr, 0}
+    };
+    while ((c = getopt_long(argc, argv, "hr:p:t:d:m:b:j:w:", long_options, nullptr)) != -1) {
         switch (c) {
+            case 1000:
+                FLAG_AUTO_PROFILE = true;
+                if (optarg != nullptr && *optarg != '\0') {
+                    AUTO_PROFILE_MODE = optarg;
+                } else {
+                    AUTO_PROFILE_MODE = "balanced";
+                }
+                break;
             case 'h':
                 menu();
                 break;
@@ -1441,6 +1676,7 @@ int main(int argc, char** argv) {
                 break;
             case 't':
                 N_THREADS = std::max(1, atoi(optarg));
+                OVERRIDE_THREADS = true;
                 break;
             case 'd': {
                 int bits = atoi(optarg);
@@ -1454,22 +1690,28 @@ int main(int argc, char** argv) {
                 } else {
                     DP_MASK = ~((1ULL << (64 - bits)) - 1);
                 }
+                OVERRIDE_DP = true;
                 break;
             }
             case 'm':
                 MAX_RAM_GB = std::max(0.1, atof(optarg));
+                OVERRIDE_RAM = true;
                 break;
             case 'j':
                 ACTIVE_JUMP_COUNT = std::max(1, std::min(atoi(optarg), JUMP_COUNT));
+                OVERRIDE_JUMPS = true;
                 break;
             case 'w':
                 ACTIVE_WILD_COUNT = std::max(0, std::min(atoi(optarg), FLEET_SIZE));
+                OVERRIDE_WILD = true;
                 break;
             default:
                 menu();
                 break;
         }
     }
+
+    apply_auto_profile_if_needed();
 
     if (TARGET_PUBKEY_HEX.empty()) {
         fprintf(stderr, "[E] Chave publica alvo (-p) e obrigatoria.\n");
