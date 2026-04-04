@@ -2397,9 +2397,79 @@ int main(int argc, char **argv)	{
 					free(str_divpretotal);
 
 				}
-				printf("%s",buffer);
-				fflush(stdout);
-				THREADOUTPUT = 0;			
+
+				// Barra de progresso para modo sequential
+				if (!FLAGRANDOM && !n_range_diff.IsZero()) {
+					Int range_total;
+					range_total.Set(&n_range_diff);
+					
+					Int range_progress;
+					range_progress.Set(&n_range_start);
+					range_progress.Sub(&n_range_aux);
+					
+					Int percent;
+					percent.Set(&range_progress);
+					percent.Mult(100);
+					percent.Div(&range_total);
+					
+					Int rate_per_sec;
+					rate_per_sec.Set(&total);
+					rate_per_sec.Div(&seconds);
+					
+					Int remaining_keys;
+					remaining_keys.Set(&n_range_end);
+					remaining_keys.Sub(&n_range_start);
+					
+					Int eta_seconds;
+					if (!rate_per_sec.IsZero()) {
+						eta_seconds.Set(&remaining_keys);
+						eta_seconds.Div(&rate_per_sec);
+					}
+					
+					char* str_percent = percent.GetBase10();
+					char* str_eta = eta_seconds.GetBase10();
+					
+					int pct = percent.GetInt32();
+					if (pct < 0) pct = 0;
+					if (pct > 100) pct = 100;
+					
+					int bar_width = 30;
+					int filled = (pct * bar_width) / 100;
+					int empty = bar_width - filled;
+					
+					char bar[64] = {0};
+					int pos = 0;
+					bar[pos++] = '[';
+					for (int i = 0; i < filled; i++) bar[pos++] = '#';
+					for (int i = 0; i < empty; i++) bar[pos++] = '-';
+					bar[pos++] = ']';
+					bar[pos] = '\0';
+					
+					sprintf(buffer, "\r%s %3d%% | Keys: %s | Rate: %s/s | ETA: %ss ", 
+						bar, pct, str_total, str_pretotal, str_eta);
+					
+					printf("%s", buffer);
+					fflush(stdout);
+					
+					free(str_percent);
+					free(str_eta);
+				}
+				else if (FLAGRANDOM) {
+					// Modo random: mostrar tempo decorrido
+					int total_secs = seconds.GetInt32();
+					int hrs = total_secs / 3600;
+					int mins = (total_secs % 3600) / 60;
+					int secs = total_secs % 60;
+					
+					sprintf(buffer, "\r[Random] Keys: %s | Rate: %s/s | Time: %02d:%02d:%02d ", 
+						str_total, str_pretotal, hrs, mins, secs);
+					printf("%s", buffer);
+					fflush(stdout);
+				}
+				else {
+					printf("%s", buffer);
+					fflush(stdout);
+				}			
 #ifdef _WIN64
 				ReleaseMutex(bsgs_thread);
 #else
