@@ -43,13 +43,8 @@ std::atomic<bool> SHOULD_SAVE(false);
 #define CRYPTO_ETH 2
 #define CRYPTO_ALL 3
 
-#define MODE_XPOINT 0
-#define MODE_ADDRESS 1
-#define MODE_BSGS 2
-#define MODE_RMD160 3
-#define MODE_PUB2RMD 4
-#define MODE_MINIKEYS 5
-#define MODE_VANITY 6
+#define MODE_ADDRESS 0
+#define MODE_BSGS    1
 
 #define SEARCH_UNCOMPRESS 0
 #define SEARCH_COMPRESS 1
@@ -183,8 +178,6 @@ void writeFileIfNeeded(const char *fileName);
 
 void calcualteindex(int i,Int *key);
 #if defined(_WIN64) && !defined(__CYGWIN__)
-DWORD WINAPI thread_process_vanity(LPVOID vargp);
-DWORD WINAPI thread_process_minikeys(LPVOID vargp);
 DWORD WINAPI thread_process(LPVOID vargp);
 DWORD WINAPI thread_process_bsgs(LPVOID vargp);
 DWORD WINAPI thread_process_bsgs_backward(LPVOID vargp);
@@ -194,8 +187,6 @@ DWORD WINAPI thread_process_bsgs_dance(LPVOID vargp);
 DWORD WINAPI thread_bPload(LPVOID vargp);
 DWORD WINAPI thread_bPload_2cuckoos(LPVOID vargp);
 #else
-void *thread_process_vanity(void *vargp);
-void *thread_process_minikeys(void *vargp);	
 void *thread_process(void *vargp);
 void *thread_process_bsgs(void *vargp);
 void *thread_process_bsgs_backward(void *vargp);
@@ -221,7 +212,7 @@ char *bit_range_str_min;
 char *bit_range_str_max;
 
 const char *bsgs_modes[5] = {"sequential","backward","both","random","dance"};
-const char *modes[7] = {"xpoint","address","bsgs","rmd160","pub2rmd","minikeys","vanity"};
+const char *modes[2] = {"address","bsgs"};
 const char *cryptos[3] = {"btc","eth","all"};
 const char *publicsearch[3] = {"uncompress","compress","both"};
 const char *default_fileName = "addresses.txt";
@@ -933,40 +924,13 @@ int main(int argc, char **argv)	{
 				printf("[+] Matrix screen\n");
 			break;
 			case 'm':
-				switch(indexOf(optarg,modes,7)) {
-					case MODE_XPOINT: //xpoint
-						FLAGMODE = MODE_XPOINT;
-						printf("[+] Mode xpoint\n");
-					break;
-					case MODE_ADDRESS: //address
+				switch(indexOf(optarg,modes,2)) {
+					case MODE_ADDRESS:
 						FLAGMODE = MODE_ADDRESS;
 						printf("[+] Mode address\n");
 					break;
 					case MODE_BSGS:
 						FLAGMODE = MODE_BSGS;
-						//printf("[+] Mode BSGS\n");
-					break;
-					case MODE_RMD160:
-						FLAGMODE = MODE_RMD160;
-						FLAGCRYPTO = CRYPTO_BTC;
-						printf("[+] Mode rmd160\n");
-					break;
-					case MODE_PUB2RMD:
-						FLAGMODE = MODE_PUB2RMD;
-						printf("[+] Mode pub2rmd was removed\n");
-						exit(0);
-					break;
-					case MODE_MINIKEYS:
-						FLAGMODE = MODE_MINIKEYS;
-						printf("[+] Mode minikeys\n");
-					break;
-					case MODE_VANITY:
-						FLAGMODE = MODE_VANITY;
-						printf("[+] Mode vanity\n");
-						if(vanity_cuckoo == NULL){
-							vanity_cuckoo = (struct cuckoo*) calloc(1,sizeof(struct cuckoo));
-							checkpointer((void *)vanity_cuckoo,__FILE__,"calloc","vanity_cuckoo" ,__LINE__ -1);
-						}
 					break;
 					default:
 						fprintf(stderr,"[E] Unknow mode value %s\n",optarg);
@@ -1155,7 +1119,7 @@ int main(int argc, char **argv)	{
 			FLAGRANGE = 0;
 		}
 	}
-	if(FLAGMODE != MODE_BSGS && FLAGMODE != MODE_MINIKEYS)	{
+	if(FLAGMODE != MODE_BSGS)	{
 		BSGS_N.SetInt32(DEBUGCOUNT);
 		if(FLAGRANGE == 0 && FLAGBITRANGE == 0)	{
 			n_range_start.SetInt32(1);
@@ -1200,73 +1164,29 @@ int main(int argc, char **argv)	{
 			}
 		}
 		printf("[+] N = %p\n",(void*)N_SEQUENTIAL_MAX);
-		if(FLAGMODE == MODE_MINIKEYS)	{
-			BSGS_N.SetInt32(DEBUGCOUNT);
-			if(FLAGBASEMINIKEY)	{
-				printf("[+] Base Minikey : %s\n",str_baseminikey);
-			}
-			minikeyN = (char*) malloc(22);
-			checkpointer((void *)minikeyN,__FILE__,"malloc","minikeyN" ,__LINE__ -1);
-			i =0;
-			int58.SetInt32(58);
-			int_aux.SetInt64(N_SEQUENTIAL_MAX);
-			int_aux.Mult(253);	
-			/* We get approximately one valid mini key for each 256 candidates mini keys since this is only statistics we multiply N_SEQUENTIAL_MAX by 253 to ensure not missed one one candidate minikey between threads... in this approach we repeat from 1 to 3 candidates in each N_SEQUENTIAL_MAX cycle IF YOU FOUND some other workaround please let me know */
-			i = 20;
-			salir = 0;
-			do	{
-				if(!int_aux.IsZero())	{
-					int_r.Set(&int_aux);
-					int_r.Mod(&int58);
-					int_q.Set(&int_aux);
-					minikeyN[i] = (uint8_t)int_r.GetInt64();
-					int_q.Sub(&int_r);
-					int_q.Div(&int58);
-					int_aux.Set(&int_q);
-					i--;
-				}
-				else	{
-					salir =1;
-				}
-			}while(!salir && i > 0);
-			minikey_n_limit = 21 -i;
+		
+		if(FLAGBITRANGE)	{	// Bit Range
+			printf("[+] Bit Range %i\n",bitrange);
 		}
 		else	{
-			if(FLAGBITRANGE)	{	// Bit Range
-				printf("[+] Bit Range %i\n",bitrange);
-			}
-			else	{
-				printf("[+] Range \n");
-			}
-		}
-		if(FLAGMODE != MODE_MINIKEYS)	{
-			hextemp = n_range_start.GetBase16();
-			printf("[+] -- from : 0x%s\n",hextemp);
-			free(hextemp);
-			hextemp = n_range_end.GetBase16();
-			printf("[+] -- to   : 0x%s\n",hextemp);
-			free(hextemp);
-		}
-
-		switch(FLAGMODE)	{
-			case MODE_MINIKEYS:
-			case MODE_RMD160:
-			case MODE_ADDRESS:
-			case MODE_XPOINT:
-				if(!readFileAddress(fileName))	{
-					fprintf(stderr,"[E] Unenexpected error\n");
-					exit(EXIT_FAILURE);
-				}
-			break;
-			case MODE_VANITY:
-				if(!readFileVanity(fileName))	{
-					fprintf(stderr,"[E] Unenexpected error\n");
-					exit(EXIT_FAILURE);
-				}
-			break;
+			printf("[+] Range \n");
 		}
 		
-		if(FLAGMODE != MODE_VANITY && !FLAGREADEDFILE1)	{
+		hextemp = n_range_start.GetBase16();
+		printf("[+] -- from : 0x%s\n",hextemp);
+		free(hextemp);
+		hextemp = n_range_end.GetBase16();
+		printf("[+] -- to   : 0x%s\n",hextemp);
+		free(hextemp);
+
+		if(FLAGMODE == MODE_ADDRESS)	{
+			if(!readFileAddress(fileName))	{
+				fprintf(stderr,"[E] Unenexpected error\n");
+				exit(EXIT_FAILURE);
+			}
+		}
+		
+		if(!FLAGREADEDFILE1)	{
 			printf("[+] Sorting data ...");
 			_sort(addressTable,N);
 			printf(" done! %" PRIu64 " values were loaded and sorted\n",N);
@@ -2377,27 +2297,11 @@ int main(int argc, char **argv)	{
 			switch(FLAGMODE)	{
 #if defined(_WIN64) && !defined(__CYGWIN__)
 				case MODE_ADDRESS:
-				case MODE_XPOINT:
-				case MODE_RMD160:
 					tid[j] = CreateThread(NULL, 0, thread_process, (void*)tt, 0, &s);
-				break;
-				case MODE_MINIKEYS:
-					tid[j] = CreateThread(NULL, 0, thread_process_minikeys, (void*)tt, 0, &s);
-				break;
-				case MODE_VANITY:
-					tid[j] = CreateThread(NULL, 0, thread_process_vanity, (void*)tt, 0, &s);
 				break;
 #else
 				case MODE_ADDRESS:
-				case MODE_XPOINT:
-				case MODE_RMD160:
 					s = pthread_create(&tid[j],NULL,thread_process,(void *)tt);
-				break;
-				case MODE_MINIKEYS:
-					s = pthread_create(&tid[j],NULL,thread_process_minikeys,(void *)tt);
-				break;
-				case MODE_VANITY:
-					s = pthread_create(&tid[j],NULL,thread_process_vanity,(void *)tt);
 				break;
 #endif
 			}
@@ -2453,12 +2357,7 @@ int main(int argc, char **argv)	{
 				}
 				
 				if(FLAGENDOMORPHISM)	{
-					if(FLAGMODE == MODE_XPOINT)	{
-						total.Mult(3);
-					}
-					else	{
-						total.Mult(6);
-					}
+					total.Mult(6);
 				}
 				else	{
 					if(FLAGSEARCH == SEARCH_COMPRESS)	{
@@ -2613,6 +2512,7 @@ int searchbinary(struct address_value *buffer,char *data,int64_t array_length) {
 	}
 	return r;
 }
+
 
 #if defined(_WIN64) && !defined(__CYGWIN__)
 DWORD WINAPI thread_process_minikeys(LPVOID vargp) {
@@ -2992,7 +2892,6 @@ void *thread_process(void *vargp)	{
 								
 				for(j = 0; j < CPU_GRP_SIZE/4;j++){
 					switch(FLAGMODE)	{
-						case MODE_RMD160:
 						case MODE_ADDRESS:
 							if(FLAGCRYPTO == CRYPTO_BTC){
 								
@@ -3065,7 +2964,6 @@ void *thread_process(void *vargp)	{
 
 
 					switch(FLAGMODE)	{
-						case MODE_RMD160:
 						case MODE_ADDRESS:
 							if( FLAGCRYPTO  == CRYPTO_BTC) {
 								
@@ -3277,64 +3175,6 @@ void *thread_process(void *vargp)	{
 												keyfound.Add(&key_mpz);
 												writekeyeth(&keyfound);
 											}
-										}
-									}
-								}
-							}
-						break;
-						case MODE_XPOINT:
-							for(k = 0; k < 4;k++)	{
-								if(FLAGENDOMORPHISM)	{
-									pts[(4*j)+k].x.Get32Bytes((unsigned char *)rawvalue);
-									r = cuckoo_check(&cuckoo,rawvalue,MAXLENGTHADDRESS);
-									if(r) {
-										r = searchbinary(addressTable,rawvalue,N);
-										if(r) {
-											keyfound.SetInt32(k);
-											keyfound.Mult(&stride);
-											keyfound.Add(&key_mpz);
-											
-											writekey(false,&keyfound);
-										}
-									}
-									endomorphism_beta[(j*4)+k].x.Get32Bytes((unsigned char *)rawvalue);
-									r = cuckoo_check(&cuckoo,rawvalue,MAXLENGTHADDRESS);
-									if(r) {
-										r = searchbinary(addressTable,rawvalue,N);
-										if(r) {
-											keyfound.SetInt32(k);
-											keyfound.Mult(&stride);
-											keyfound.Add(&key_mpz);
-											keyfound.ModMulK1order(&lambda);
-											
-											writekey(false,&keyfound);
-										}
-									}
-									
-									endomorphism_beta2[(j*4)+k].x.Get32Bytes((unsigned char *)rawvalue);
-									r = cuckoo_check(&cuckoo,rawvalue,MAXLENGTHADDRESS);
-									if(r) {
-										r = searchbinary(addressTable,rawvalue,N);
-										if(r) {
-											keyfound.SetInt32(k);
-											keyfound.Mult(&stride);
-											keyfound.Add(&key_mpz);
-											keyfound.ModMulK1order(&lambda2);
-											writekey(false,&keyfound);
-										}
-									}
-								}
-								else	{
-									pts[(4*j)+k].x.Get32Bytes((unsigned char *)rawvalue);
-									r = cuckoo_check(&cuckoo,rawvalue,MAXLENGTHADDRESS);
-									if(r) {
-										r = searchbinary(addressTable,rawvalue,N);
-										if(r) {
-											keyfound.SetInt32(k);
-											keyfound.Mult(&stride);
-											keyfound.Add(&key_mpz);
-											
-											writekey(false,&keyfound);
 										}
 									}
 								}
@@ -6731,13 +6571,6 @@ bool readFileAddress(char *fileName)	{
 				if(FLAGCRYPTO == CRYPTO_ETH)	{
 					return forceReadFileAddressEth(fileName);
 				}
-			break;
-			case MODE_MINIKEYS:
-			case MODE_RMD160:
-				return forceReadFileAddress(fileName);
-			break;
-			case MODE_XPOINT:
-				return forceReadFileXPoint(fileName);
 			break;
 			default:
 				return false;
