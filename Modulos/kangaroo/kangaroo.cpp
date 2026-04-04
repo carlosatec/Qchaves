@@ -49,6 +49,7 @@ extern "C" {
 #define JUMP_COUNT 64
 #define TRAP_SHARDS 16
 #define CHECKPOINT_VERSION 3
+#define EARLY_TERMINATION_THRESHOLD 1000000ULL
 
 struct Kangaroo {
     secp256k1_gej point;
@@ -98,6 +99,7 @@ struct ThreadContext {
     Kangaroo fleet[FLEET_SIZE];
     UInt192 fleet_dists[FLEET_SIZE];
     unsigned char x_cache[FLEET_SIZE][32];
+    bool x_cache_dirty;
     uint64_t hops;
     std::mutex mutex;
 };
@@ -565,6 +567,14 @@ void u192_set_pow2(UInt192& value, unsigned exponent) {
     u192_set_bit(value, exponent);
 }
 
+bool u192_to_u64(const UInt192& value, uint64_t& out) {
+    if (value.hi != 0 || value.mid != 0) {
+        return false;
+    }
+    out = value.lo;
+    return true;
+}
+
 void u192_to_bytes32(const UInt192& value, unsigned char out[32]) {
     memset(out, 0, 32);
     for (int i = 0; i < 8; ++i) {
@@ -1004,6 +1014,9 @@ bool read_gej_compressed(FILE* f, secp256k1_gej* p) {
 }
 
 void refresh_x_cache_locked(ThreadContext* tc) {
+    if (!tc->x_cache_dirty) {
+        return;
+    }
     secp256k1_ge affine_fleet[FLEET_SIZE];
     secp256k1_gej jacobian_fleet[FLEET_SIZE];
     for (int i = 0; i < FLEET_SIZE; ++i) {
@@ -1015,6 +1028,7 @@ void refresh_x_cache_locked(ThreadContext* tc) {
         secp256k1_fe_normalize(&affine_fleet[i].x);
         secp256k1_fe_get_b32(tc->x_cache[i], &affine_fleet[i].x);
     }
+    tc->x_cache_dirty = false;
 }
 
 void fleet_gej_initial_jump(secp256k1_gej* res, const secp256k1_gej* start, int count) {
@@ -1154,6 +1168,7 @@ bool load_checkpoint_v1(FILE* f) {
         ThreadContext* tc = new ThreadContext();
         tc->id = t;
         tc->hops = 0;
+        tc->x_cache_dirty = true;
         for (int i = 0; i < FLEET_SIZE; ++i) {
             fread(&tc->fleet[i].is_wild, 1, 1, f);
             fread(&tc->fleet[i].point, sizeof(secp256k1_gej), 1, f);
@@ -1211,6 +1226,7 @@ bool load_checkpoint_v3(FILE* f) {
         ThreadContext* tc = new ThreadContext();
         tc->id = t;
         tc->hops = 0;
+        tc->x_cache_dirty = true;
         for (int i = 0; i < FLEET_SIZE; ++i) {
             fread(&tc->fleet[i].is_wild, 1, 1, f);
             if (!read_gej_compressed(f, &tc->fleet[i].point)) {
@@ -1253,6 +1269,7 @@ bool load_checkpoint_v2(FILE* f) {
         ThreadContext* tc = new ThreadContext();
         tc->id = t;
         tc->hops = 0;
+        tc->x_cache_dirty = true;
         for (int i = 0; i < FLEET_SIZE; ++i) {
             fread(&tc->fleet[i].is_wild, 1, 1, f);
             if (!read_gej_compressed(f, &tc->fleet[i].point)) {
@@ -1513,8 +1530,54 @@ bool resolve_collision(const TrapEntry& entry, const DPCandidate& candidate) {
     return ok;
 }
 
+#if defined(USE_EARLY_TERMINATION) && USE_EARLY_TERMINATION == 1
+void worker_thread_bruteforce(ThreadContext* tc) {
+    secp256k1_gej current_point = tc->fleet[0].point;
+    UInt192 current_dist = tc->fleet_dists[0];
+    UInt192 thread_start = RANGE_START_U192;
+    
+    if (N_THREADS > 1) {
+        UInt192 stride = u192_div_u32(RANGE_SPAN_U192, static_cast<uint32_t>(N_THREADS));
+        for (int s = 0; s < tc->id; s++) {
+            u192_add_inplace(thread_start, stride);
+        }
+    }
+
+    while (!SHOULD_SAVE && !KEY_FOUND_FLAG) {
+        unsigned char hash[20];
+        secp->GetHash160(P2PKH, true, current_point, hash);
+        
+        for (size_t t = 0; t < targets.size(); t++) {
+            if (memcmp(hash, targets[t].data(), 20) == 0) {
+                printf("[!] Thread %d: CHAVE ENCONTRADA!\n", tc->id);
+                KEY_FOUND_FLAG = true;
+                return;
+            }
+        }
+        
+        secp256k1_gej_add_ge(&current_point, &current_point, &secp->generator);
+        u192_add_u64_inplace(current_dist, 1);
+        
+        if (HAS_RANGE_END && u192_compare(current_dist, RANGE_END_U192) > 0) {
+            break;
+        }
+        tc->hops++;
+    }
+}
+#endif
+
 void worker_thread(ThreadContext* tc) {
     std::vector<DPCandidate> candidates;
+
+#if defined(USE_EARLY_TERMINATION) && USE_EARLY_TERMINATION == 1
+    uint64_t range_span_64;
+    if (u192_to_u64(RANGE_SPAN_U192, range_span_64) && range_span_64 < EARLY_TERMINATION_THRESHOLD) {
+        printf("[i] Thread %d: Usando early termination para range pequeno (%llu chaves)\n",
+               tc->id, (unsigned long long)range_span_64);
+        worker_thread_bruteforce(tc);
+        return;
+    }
+#endif
 
     while (!SHOULD_SAVE && !KEY_FOUND_FLAG) {
         {
@@ -1526,6 +1589,7 @@ void worker_thread(ThreadContext* tc) {
                 add_jump_distance(tc->fleet_dists[i], jump_dists[jump_idx]);
                 clamp_tame_to_range_if_needed(tc, i);
             }
+            tc->x_cache_dirty = true;
             TIME_JUMPS_NS.fetch_add(elapsed_ns_since(jumps_start), std::memory_order_relaxed);
 
             const auto cache_start = std::chrono::steady_clock::now();
@@ -1604,6 +1668,7 @@ void initialize_new_search() {
         ThreadContext* tc = new ThreadContext();
         tc->id = t;
         tc->hops = 0;
+        tc->x_cache_dirty = true;
 
         mpz_t thread_start;
         mpz_init(thread_start);

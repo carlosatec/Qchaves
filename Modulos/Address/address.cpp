@@ -134,6 +134,9 @@ int searchbinary(struct address_value *buffer,char *data,int64_t array_length);
 void sleep_ms(int milliseconds);
 
 void _sort(struct address_value *arr,int64_t N);
+#if defined(USE_RADIX_SORT) && USE_RADIX_SORT == 1
+void address_radix_sort(struct address_value *arr, int64_t n);
+#endif
 void _insertionsort(struct address_value *arr, int64_t n);
 void _introsort(struct address_value *arr,uint32_t depthLimit, int64_t n);
 void _swap(struct address_value *a,struct address_value *b);
@@ -142,6 +145,9 @@ void _myheapsort(struct address_value	*arr, int64_t n);
 void _heapify(struct address_value *arr, int64_t n, int64_t i);
 
 void bsgs_sort(struct bsgs_xvalue *arr,int64_t n);
+#if defined(USE_RADIX_SORT) && USE_RADIX_SORT == 1
+void bsgs_radix_sort(struct bsgs_xvalue *arr, int64_t n);
+#endif
 void bsgs_myheapsort(struct bsgs_xvalue *arr, int64_t n);
 void bsgs_insertionsort(struct bsgs_xvalue *arr, int64_t n);
 void bsgs_introsort(struct bsgs_xvalue *arr,uint32_t depthLimit, int64_t n);
@@ -3626,9 +3632,66 @@ void _swap(struct address_value *a,struct address_value *b)	{
 }
 
 void _sort(struct address_value *arr,int64_t n)	{
+#if defined(USE_RADIX_SORT) && USE_RADIX_SORT == 1
+	if(n > 1024) {
+		address_radix_sort(arr, n);
+		return;
+	}
+#endif
 	uint32_t depthLimit = ((uint32_t) ceil(log(n))) * 2;
 	_introsort(arr,depthLimit,n);
 }
+
+#if defined(USE_RADIX_SORT) && USE_RADIX_SORT == 1
+void address_radix_sort(struct address_value *arr, int64_t n) {
+	if(n <= 0) return;
+	
+	const int NUM_BYTES = 20;
+	const int NUM_BUCKETS = 256;
+	
+	struct address_value *temp = (struct address_value*) malloc(n * sizeof(struct address_value));
+	if(!temp) {
+		uint32_t depthLimit = ((uint32_t) ceil(log(n))) * 2;
+		_introsort(arr, depthLimit, n);
+		return;
+	}
+	
+	struct address_value *src = arr;
+	struct address_value *dst = temp;
+	int64_t count[NUM_BUCKETS];
+	
+	for(int byte = 0; byte < NUM_BYTES; byte++) {
+		memset(count, 0, sizeof(count));
+		
+		for(int64_t i = 0; i < n; i++) {
+			uint8_t key = src[i].value[byte];
+			count[key]++;
+		}
+		
+		int64_t sum = 0;
+		for(int b = 0; b < NUM_BUCKETS; b++) {
+			int64_t tmp_count = count[b];
+			count[b] = sum;
+			sum += tmp_count;
+		}
+		
+		for(int64_t i = 0; i < n; i++) {
+			uint8_t key = src[i].value[byte];
+			dst[count[key]++] = src[i];
+		}
+		
+		struct address_value *tmp = src;
+		src = dst;
+		dst = tmp;
+	}
+	
+	if(src != arr) {
+		memcpy(arr, src, n * sizeof(struct address_value));
+	}
+	
+	free(temp);
+}
+#endif
 
 void _introsort(struct address_value *arr,uint32_t depthLimit, int64_t n) {
 	int64_t p;
@@ -3731,9 +3794,66 @@ void bsgs_swap(struct bsgs_xvalue *a,struct bsgs_xvalue *b)	{
 
 /*	OK	*/
 void bsgs_sort(struct bsgs_xvalue *arr,int64_t n)	{
+#if defined(USE_RADIX_SORT) && USE_RADIX_SORT == 1
+	if(n > 1024) {
+		bsgs_radix_sort(arr, n);
+		return;
+	}
+#endif
 	uint32_t depthLimit = ((uint32_t) ceil(log(n))) * 2;
 	bsgs_introsort(arr,depthLimit,n);
 }
+
+#if defined(USE_RADIX_SORT) && USE_RADIX_SORT == 1
+void bsgs_radix_sort(struct bsgs_xvalue *arr, int64_t n) {
+	if(n <= 0) return;
+	
+	const int NUM_BYTES = BSGS_XVALUE_RAM;
+	const int NUM_BUCKETS = 256;
+	
+	struct bsgs_xvalue *temp = (struct bsgs_xvalue*) malloc(n * sizeof(struct bsgs_xvalue));
+	if(!temp) {
+		uint32_t depthLimit = ((uint32_t) ceil(log(n))) * 2;
+		bsgs_introsort(arr, depthLimit, n);
+		return;
+	}
+	
+	struct bsgs_xvalue *src = arr;
+	struct bsgs_xvalue *dst = temp;
+	int64_t count[NUM_BUCKETS];
+	
+	for(int byte = 0; byte < NUM_BYTES; byte++) {
+		memset(count, 0, sizeof(count));
+		
+		for(int64_t i = 0; i < n; i++) {
+			uint8_t key = src[i].value[byte];
+			count[key]++;
+		}
+		
+		int64_t sum = 0;
+		for(int b = 0; b < NUM_BUCKETS; b++) {
+			int64_t tmp_count = count[b];
+			count[b] = sum;
+			sum += tmp_count;
+		}
+		
+		for(int64_t i = 0; i < n; i++) {
+			uint8_t key = src[i].value[byte];
+			dst[count[key]++] = src[i];
+		}
+		
+		struct bsgs_xvalue *tmp = src;
+		src = dst;
+		dst = tmp;
+	}
+	
+	if(src != arr) {
+		memcpy(arr, src, n * sizeof(struct bsgs_xvalue));
+	}
+	
+	free(temp);
+}
+#endif
 
 /*	OK	*/
 void bsgs_introsort(struct bsgs_xvalue *arr,uint32_t depthLimit, int64_t n) {
