@@ -146,6 +146,7 @@ bool Secp256K1::ParsePublicKeyHex(char *str,Point &ret,bool &isCompressed) {
 
   if (!EC(ret)) {
     printf("ParsePublicKeyHex: Error invalid public key specified (Not lie on elliptic curve)\n");
+    ret.Clear();
     return false;
   }
 
