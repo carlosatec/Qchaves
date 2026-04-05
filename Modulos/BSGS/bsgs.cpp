@@ -712,7 +712,8 @@ bool load_checkpoint_bsgs(int bits) {
                         n_range_end.SetBase16(range_end_hex);
                         BSGS_CURRENT.SetBase16(current_hex);
                         FLAGBSGSMODE = mode_snapshot;
-                        printf("[+] Retomando BSGS_CURRENT: 0x%s\n", current_hex);
+                        FLAGRANDOM = (mode_snapshot == 3) ? 1 : 0;
+                        printf("[+] Retomando BSGS_CURRENT: 0x%s (mode: %s)\n", current_hex, bsgs_modes[FLAGBSGSMODE]);
                         
                         uint32_t saved_point_count = 0;
                         if (fread(&saved_point_count, sizeof(uint32_t), 1, f) == 1 && saved_point_count > 0) {
@@ -733,7 +734,8 @@ bool load_checkpoint_bsgs(int bits) {
                         n_range_end.SetBase16(range_end_hex);
                         BSGS_CURRENT.SetBase16(current_hex);
                         FLAGBSGSMODE = mode_snapshot;
-                        printf("[+] Retomando BSGS_CURRENT: 0x%s (formato legado)\n", current_hex);
+                        FLAGRANDOM = (mode_snapshot == 3) ? 1 : 0;
+                        printf("[+] Retomando BSGS_CURRENT: 0x%s (modo legado)\n", current_hex);
                         fclose(f);
                         return true;
                     }
@@ -850,6 +852,9 @@ int main(int argc, char **argv)	{
 				index_value = indexOf(optarg,bsgs_modes,5);
 				if(index_value >= 0 && index_value <= 4)	{
 					FLAGBSGSMODE = index_value;
+					if (index_value == 3) {
+						FLAGRANDOM = 1;
+					}
 					printf("[+] BSGS mode %s\n",optarg);
 				}
 				else	{
