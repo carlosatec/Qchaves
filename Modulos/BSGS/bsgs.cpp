@@ -115,14 +115,8 @@ struct __attribute__((__packed__)) publickey {
 };
 #endif
 
-const char *Ccoinbuffer_default = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
-char *Ccoinbuffer = (char*) Ccoinbuffer_default;
-char *str_baseminikey = NULL;
-char *raw_baseminikey = NULL;
-char *minikeyN = NULL;
-int minikey_n_limit;
-	
+
 
 #define CPU_GRP_SIZE 1024
 
@@ -163,13 +157,8 @@ int bsgs_secondcheck_with_point(Int *start_range,uint32_t a,uint32_t k_index,Int
 int bsgs_thirdcheck(Int *start_range,uint32_t a,uint32_t k_index,Int *privatekey);
 int bsgs_thirdcheck_with_point(Int *start_range,uint32_t a,uint32_t k_index,Int *privatekey,Point *precomputed_point,Point *precomputed_neg);
 
-void sha256sse_22(uint8_t *src0, uint8_t *src1, uint8_t *src2, uint8_t *src3, uint8_t *dst0, uint8_t *dst1, uint8_t *dst2, uint8_t *dst3);
-void sha256sse_23(uint8_t *src0, uint8_t *src1, uint8_t *src2, uint8_t *src3, uint8_t *dst0, uint8_t *dst1, uint8_t *dst2, uint8_t *dst3);
 
-bool vanityrmdmatch(unsigned char *rmdhash);
-void writevanitykey(bool compress,Int *key);
-int addvanity(char *target);
-int minimum_same_bytes(unsigned char* A,unsigned char* B, int length);
+
 
 void writekey(bool compressed,Int *key);
 void writekeyeth(Int *key);
@@ -180,11 +169,13 @@ bool isBase58(char c);
 bool isValidBase58String(char *str);
 
 bool readFileAddress(char *fileName);
-bool readFileVanity(char *fileName);
+
+
 bool forceReadFileAddress(char *fileName);
 bool forceReadFileAddressEth(char *fileName);
 bool forceReadFileXPoint(char *fileName);
-bool processOneVanity();
+
+
 
 bool initCuckooFilter(struct cuckoo *cuckoo_arg,uint64_t items_cuckoo);
 
@@ -214,9 +205,8 @@ void *thread_bPload_2cuckoos(void *vargp);
 char *pubkeytopubaddress(char *pkey,int length);
 void pubkeytopubaddress_dst(char *pkey,int length,char *dst);
 void rmd160toaddress_dst(char *rmd,char *dst);
-void set_minikey(char *buffer,char *rawbuffer,int length);
-bool increment_minikey_index(char *buffer,char *rawbuffer,int index);
-void increment_minikey_N(char *rawbuffer);
+
+
 	
 void KECCAK_256(uint8_t *source, size_t size,uint8_t *dst);
 void generate_binaddress_eth(Point &publickey,unsigned char *dst_address);
@@ -255,13 +245,8 @@ uint64_t OLDFINISHED_ITEMS = -1;
 uint8_t byte_encode_crypto = 0x00;		/* Bitcoin  */
 
 
-int vanity_rmd_targets = 0;
-int vanity_rmd_total = 0;
-int *vanity_rmd_limits = NULL;
-uint8_t ***vanity_rmd_limit_values_A = NULL,***vanity_rmd_limit_values_B = NULL;
-int vanity_rmd_minimun_bytes_check_length = 999999;
-char **vanity_address_targets = NULL;
-struct cuckoo *vanity_cuckoo = NULL;
+
+
 
 struct cuckoo cuckoo;
 
@@ -278,13 +263,9 @@ Int OUTPUTSECONDS;
 int FLAGSKIPCHECKSUM = 0;
 int FLAGENDOMORPHISM = 0;
 
-int FLAGCUCKOOMULTIPLIER = 1;
-int FLAGVANITY = 0;
-int FLAGBASEMINIKEY = 0;
 int FLAGBSGSMODE = 0;
 int FLAGDEBUG = 0;
 int FLAGQUIET = 0;
-int FLAGMATRIX = 0;
 int KFACTOR = 1;
 int MAXLENGTHADDRESS = -1;
 int NTHREADS = 1;
@@ -627,18 +608,7 @@ void signal_handler(int sig) {
 }
 
 void cleanup_bsgs() {
-    if (str_baseminikey != NULL) {
-        free(str_baseminikey);
-        str_baseminikey = NULL;
-    }
-    if (raw_baseminikey != NULL) {
-        free(raw_baseminikey);
-        raw_baseminikey = NULL;
-    }
-    if (minikeyN != NULL) {
-        free(minikeyN);
-        minikeyN = NULL;
-    }
+
     if (cuckoo.bf != NULL) {
         free(cuckoo.bf);
         cuckoo.bf = NULL;
@@ -829,7 +799,7 @@ int main(int argc, char **argv)	{
 	
 	
 
-	while ((c = getopt(argc, argv, "deh6MqSR:b:c:C:E:f:I:k:l:m:N:n:p:r:s:t:v:G:8:z:A")) != -1) {
+	while ((c = getopt(argc, argv, "deh6qSR:b:c:E:f:I:k:l:m:N:n:p:r:s:t:G:A")) != -1) {
 		switch(c) {
 			case 'A':
 				FLAG_AUTO_PROFILE = true;
@@ -899,11 +869,7 @@ int main(int argc, char **argv)	{
 						FLAGCRYPTO = CRYPTO_ETH;
 						printf("[+] Setting search for ETH adddress.\n");
 					break;
-					/*
-					case 2: //all
-						FLAGCRYPTO = CRYPTO_ALL;
-					break;
-					*/
+
 					default:
 						FLAGCRYPTO = CRYPTO_NONE;
 						fprintf(stderr,"[E] Unknow crypto value %s\n",optarg);
@@ -911,31 +877,7 @@ int main(int argc, char **argv)	{
 					break;
 				}
 			break;
-			case 'C':
-				if(strlen(optarg) == 22)	{
-					FLAGBASEMINIKEY = 1;
-					str_baseminikey = (char*) malloc(23);
-					checkpointer((void *)str_baseminikey,__FILE__,"malloc","str_baseminikey" ,__LINE__ - 1);
-					raw_baseminikey = (char*) malloc(23);
-					checkpointer((void *)raw_baseminikey,__FILE__,"malloc","raw_baseminikey" ,__LINE__ - 1);
-					strncpy(str_baseminikey,optarg,22);
-					for(i = 0; i< 21; i++)	{
-						if(strchr(Ccoinbuffer,str_baseminikey[i+1]) != NULL)	{
-							raw_baseminikey[i] = (int)(strchr(Ccoinbuffer,str_baseminikey[i+1]) - Ccoinbuffer) % 58;
-						}
-						else	{
-							fprintf(stderr,"[E] invalid character in minikey\n");
-							exit(EXIT_FAILURE);
-						}
-						
-					}
-				}
-				else	{
-					fprintf(stderr,"[E] Invalid Minikey length %li : %s\n",strlen(optarg),optarg);
-					exit(EXIT_FAILURE);
-				}
-				
-			break;
+
 			case 'd':
 				FLAGDEBUG = 1;
 				printf("[+] Flag DEBUG enabled\n");
@@ -985,10 +927,7 @@ int main(int argc, char **argv)	{
 					break;
 				}
 			break;
-			case 'M':
-				FLAGMATRIX = 1;
-				printf("[+] Matrix screen\n");
-			break;
+
 			case 'm':
 				switch(indexOf(optarg,modes,2)) {
 					case MODE_ADDRESS:
@@ -1077,46 +1016,9 @@ int main(int argc, char **argv)	{
 			}
 			printf((NTHREADS > 1) ? "[+] Threads : %u\n": "[+] Thread : %u\n",NTHREADS);
 		break;
-			case 'v':
-				FLAGVANITY = 1;
-				if(vanity_cuckoo == NULL){
-					vanity_cuckoo = (struct cuckoo*) calloc(1,sizeof(struct cuckoo));
-					checkpointer((void *)vanity_cuckoo,__FILE__,"calloc","vanity_cuckoo" ,__LINE__ -1);
-				}
-				if(isValidBase58String(optarg))	{
-					if(addvanity(optarg) > 0)	{
-						printf("[+] Added Vanity search : %s\n",optarg);
-					}
-					else	{
-						printf("[+] Vanity search \"%s\" was NOT Added\n",optarg);
-					}
-				}
-				else {
-					fprintf(stderr,"[+] The string \"%s\" is not Valid Base58\n",optarg);
-				}
-				
-			break;
-			case '8':
-				if(strlen(optarg) == 58)	{
-					Ccoinbuffer = optarg; 
-					printf("[+] Base58 for Minikeys %s\n",Ccoinbuffer);
-				}
-				else	{
-					fprintf(stderr,"[E] The base58 alphabet must be 58 characters long.\n");
-					exit(EXIT_FAILURE);
-				}
-			break;
-			case 'z':
-				if(optarg == NULL) {
-					fprintf(stderr,"[E] -z requires an argument\n");
-					exit(EXIT_FAILURE);
-				}
-				FLAGCUCKOOMULTIPLIER= strtol(optarg,NULL,10);
-				if(FLAGCUCKOOMULTIPLIER <= 0)	{
-					FLAGCUCKOOMULTIPLIER = 1;
-				}
-				printf("[+] Cuckoo Size Multiplier %i\n",FLAGCUCKOOMULTIPLIER);
-			break;
+
+
+
 			default:
 				fprintf(stderr,"[E] Unknow opcion -%c\n",c);
 				exit(EXIT_FAILURE);
@@ -1691,7 +1593,7 @@ int main(int argc, char **argv)	{
 		if(FLAGSAVEREADFILE)	{
 			/*Reading file for 1st cuckoo filter */
 
-			snprintf(buffer_cuckoo_file,1024,"keyhunt_bsgs_4_%" PRIu64 ".ckf",bsgs_m);
+			snprintf(buffer_cuckoo_file,1024,"qchaves_bsgs_4_%" PRIu64 ".ckf",bsgs_m);
 			fd_aux1 = fopen(buffer_cuckoo_file,"rb");
 			if(fd_aux1 != NULL)	{
 				printf("[+] Reading cuckoo filter from file %s ",buffer_cuckoo_file);
@@ -1729,7 +1631,7 @@ int main(int argc, char **argv)	{
 				printf(" Done!\n");
 				fclose(fd_aux1);
 				memset(buffer_cuckoo_file,0,1024);
-				snprintf(buffer_cuckoo_file,1024,"keyhunt_bsgs_3_%" PRIu64 ".ckf",bsgs_m);
+				snprintf(buffer_cuckoo_file,1024,"qchaves_bsgs_3_%" PRIu64 ".ckf",bsgs_m);
 				fd_aux1 = fopen(buffer_cuckoo_file,"rb");
 				if(fd_aux1 != NULL) {
 					fclose(fd_aux1);
@@ -1739,7 +1641,7 @@ int main(int argc, char **argv)	{
 			}
 			
 			/*Reading file for 2nd cuckoo filter */
-			snprintf(buffer_cuckoo_file,1024,"keyhunt_bsgs_6_%" PRIu64 ".ckf",bsgs_m2);
+			snprintf(buffer_cuckoo_file,1024,"qchaves_bsgs_6_%" PRIu64 ".ckf",bsgs_m2);
 			fd_aux2 = fopen(buffer_cuckoo_file,"rb");
 			if(fd_aux2 != NULL)	{
 				printf("[+] Reading cuckoo filter from file %s ",buffer_cuckoo_file);
@@ -1778,14 +1680,14 @@ int main(int argc, char **argv)	{
 				fclose(fd_aux2);
 				printf(" Done!\n");
 				memset(buffer_cuckoo_file,0,1024);
-				snprintf(buffer_cuckoo_file,1024,"keyhunt_bsgs_5_%" PRIu64 ".ckf",bsgs_m2);
+				snprintf(buffer_cuckoo_file,1024,"qchaves_bsgs_5_%" PRIu64 ".ckf",bsgs_m2);
 				fd_aux2 = fopen(buffer_cuckoo_file,"rb");
 				if(fd_aux2 != NULL)	{
 					printf("[W] Unused file detected %s you can delete it without worry\n",buffer_cuckoo_file);
 					fclose(fd_aux2);
 				}
 				memset(buffer_cuckoo_file,0,1024);
-				snprintf(buffer_cuckoo_file,1024,"keyhunt_bsgs_1_%" PRIu64 ".ckf",bsgs_m2);
+				snprintf(buffer_cuckoo_file,1024,"qchaves_bsgs_1_%" PRIu64 ".ckf",bsgs_m2);
 				fd_aux2 = fopen(buffer_cuckoo_file,"rb");
 				if(fd_aux2 != NULL)	{
 					printf("[W] Unused file detected %s you can delete it without worry\n",buffer_cuckoo_file);
@@ -1798,7 +1700,7 @@ int main(int argc, char **argv)	{
 			}
 			
 			/*Reading file for bPtable */
-			snprintf(buffer_cuckoo_file,1024,"keyhunt_bsgs_2_%" PRIu64 ".tbl",bsgs_m3);
+			snprintf(buffer_cuckoo_file,1024,"qchaves_bsgs_2_%" PRIu64 ".tbl",bsgs_m3);
 			fd_aux3 = fopen(buffer_cuckoo_file,"rb");
 			if(fd_aux3 != NULL)	{
 				printf("[+] Reading bP Table from file %s .",buffer_cuckoo_file);
@@ -1829,7 +1731,7 @@ int main(int argc, char **argv)	{
 			}
 			
 			/*Reading file for 3rd cuckoo filter */
-			snprintf(buffer_cuckoo_file,1024,"keyhunt_bsgs_7_%" PRIu64 ".ckf",bsgs_m3);
+			snprintf(buffer_cuckoo_file,1024,"qchaves_bsgs_7_%" PRIu64 ".ckf",bsgs_m3);
 			fd_aux2 = fopen(buffer_cuckoo_file,"rb");
 			if(fd_aux2 != NULL)	{
 				printf("[+] Reading cuckoo filter from file %s ",buffer_cuckoo_file);
@@ -2143,7 +2045,7 @@ int main(int argc, char **argv)	{
 		}
 		if(FLAGSAVEREADFILE || FLAGUPDATEFILE1 )	{
 			if(!FLAGREADEDFILE1 || FLAGUPDATEFILE1)	{
-				snprintf(buffer_cuckoo_file,1024,"keyhunt_bsgs_4_%" PRIu64 ".ckf",bsgs_m);
+				snprintf(buffer_cuckoo_file,1024,"qchaves_bsgs_4_%" PRIu64 ".ckf",bsgs_m);
 				
 				if(FLAGUPDATEFILE1)	{
 					printf("[W] Updating old file into a new one\n");
@@ -2186,7 +2088,7 @@ int main(int argc, char **argv)	{
 			}
 			if(!FLAGREADEDFILE2  )	{
 				
-				snprintf(buffer_cuckoo_file,1024,"keyhunt_bsgs_6_%" PRIu64 ".ckf",bsgs_m2);
+				snprintf(buffer_cuckoo_file,1024,"qchaves_bsgs_6_%" PRIu64 ".ckf",bsgs_m2);
 								
 				/* Writing file for 2nd cuckoo filter */
 				fd_aux2 = fopen(buffer_cuckoo_file,"wb");
@@ -2225,7 +2127,7 @@ int main(int argc, char **argv)	{
 			
 			if(!FLAGREADEDFILE3)	{
 				/* Writing file for bPtable */
-				snprintf(buffer_cuckoo_file,1024,"keyhunt_bsgs_2_%" PRIu64 ".tbl",bsgs_m3);
+				snprintf(buffer_cuckoo_file,1024,"qchaves_bsgs_2_%" PRIu64 ".tbl",bsgs_m3);
 				fd_aux3 = fopen(buffer_cuckoo_file,"wb");
 				if(fd_aux3 != NULL)	{
 					printf("[+] Writing bP Table to file %s .. ",buffer_cuckoo_file);
@@ -2249,7 +2151,7 @@ int main(int argc, char **argv)	{
 				}
 			}
 			if(!FLAGREADEDFILE4)	{
-				snprintf(buffer_cuckoo_file,1024,"keyhunt_bsgs_7_%" PRIu64 ".ckf",bsgs_m3);
+				snprintf(buffer_cuckoo_file,1024,"qchaves_bsgs_7_%" PRIu64 ".ckf",bsgs_m3);
 								
 				/* Writing file for 3rd cuckoo filter */
 				fd_aux2 = fopen(buffer_cuckoo_file,"wb");
@@ -2455,12 +2357,7 @@ int main(int argc, char **argv)	{
 				
 				
 				if(pretotal.IsLower(&int_limits[0]))	{
-					if(FLAGMATRIX)	{
-						sprintf(buffer,"[+] Total %s keys in %s seconds: %s keys/s\n",str_total,str_seconds,str_pretotal);
-					}
-					else	{
-						sprintf(buffer,"\r[+] Total %s keys in %s seconds: %s keys/s\r",str_total,str_seconds,str_pretotal);
-					}
+					sprintf(buffer,"\r[+] Total %s keys in %s seconds: %s keys/s\r",str_total,str_seconds,str_pretotal);
 				}
 				else	{
 					i = 0;
@@ -2477,17 +2374,9 @@ int main(int argc, char **argv)	{
 					div_pretotal.Set(&pretotal);
 					div_pretotal.Div(&int_limits[salir ? i : i-1]);
 					str_divpretotal = div_pretotal.GetBase10();
-					if(FLAGMATRIX)	{
-						sprintf(buffer,"[+] Total %s keys in %s seconds: ~%s %s (%s keys/s)\n",str_total,str_seconds,str_divpretotal,str_limits_prefixs[salir ? i : i-1],str_pretotal);
-					}
-					else	{
-						if(THREADOUTPUT == 1)	{
-							sprintf(buffer,"\r[+] Total %s keys in %s seconds: ~%s %s (%s keys/s)\r",str_total,str_seconds,str_divpretotal,str_limits_prefixs[salir ? i : i-1],str_pretotal);
-						}
-						else	{
-							sprintf(buffer,"\r[+] Total %s keys in %s seconds: ~%s %s (%s keys/s)\r",str_total,str_seconds,str_divpretotal,str_limits_prefixs[salir ? i : i-1],str_pretotal);
-						}
-					}
+				if(pretotal.IsLower(&int_limits[0]))	{
+					sprintf(buffer,"\r[+] Total %s keys in %s seconds: ~%s %s (%s keys/s)\r",str_total,str_seconds,str_divpretotal,str_limits_prefixs[salir ? i : i-1],str_pretotal);
+				}
 					free(str_divpretotal);
 
 				}
@@ -2691,175 +2580,6 @@ int searchbinary(struct address_value *buffer,char *data,int64_t array_length) {
 }
 
 
-#if defined(_WIN64) && !defined(__CYGWIN__)
-DWORD WINAPI thread_process_minikeys(LPVOID vargp) {
-#else
-void *thread_process_minikeys(void *vargp)	{
-#endif
-	FILE *keys;
-	Point publickey[4];
-	Int key_mpz[4];
-	struct tothread *tt;
-	uint64_t count;
-	char publickeyhashrmd160_uncompress[4][20];
-	char public_key_uncompressed_hex[131];
-	char address[4][40],minikey[4][24],minikeys[8][24],buffer_b58[21],minikey2check[24],rawvalue[4][32];
-	char *hextemp,*rawbuffer;
-	int r,thread_number,continue_flag = 1,k,j,count_valid;
-	Int counter;
-	tt = (struct tothread *)vargp;
-	thread_number = tt->nt;
-	free(tt);
-	rawbuffer = (char*) &counter.bits64;
-	count_valid = 0;
-	for(k = 0; k < 4; k++)	{
-		minikey[k][0] = 'S';
-		minikey[k][22] = '?';
-		minikey[k][23] = 0x00;
-	}
-	minikey2check[0] = 'S';
-	minikey2check[22] = '?';
-	minikey2check[23] = 0x00;
-	
-	do	{
-		if(FLAGRANDOM)	{
-			counter.Rand(256);
-			for(k = 0; k < 21; k++)	{
-				buffer_b58[k] =(uint8_t)((uint8_t) rawbuffer[k] % 58);
-			}
-		}
-		else	{
-			if(FLAGBASEMINIKEY)	{
-#if defined(_WIN64) && !defined(__CYGWIN__)
-				WaitForSingleObject(write_random, INFINITE);
-				memcpy(buffer_b58,raw_baseminikey,21);
-				increment_minikey_N(raw_baseminikey);
-				ReleaseMutex(write_random);
-#else
-				pthread_mutex_lock(&write_random);
-				memcpy(buffer_b58,raw_baseminikey,21);
-				increment_minikey_N(raw_baseminikey);
-				pthread_mutex_unlock(&write_random);
-#endif
-			}
-			else	{
-#if defined(_WIN64) && !defined(__CYGWIN__)
-				WaitForSingleObject(write_random, INFINITE);
-#else
-				pthread_mutex_lock(&write_random);
-#endif
-				if(raw_baseminikey == NULL){
-					raw_baseminikey = (char *) malloc(22);
-					checkpointer((void *)raw_baseminikey,__FILE__,"malloc","raw_baseminikey" ,__LINE__ -1 );
-					counter.Rand(256);
-					for(k = 0; k < 21; k++)	{
-						raw_baseminikey[k] =(uint8_t)((uint8_t) rawbuffer[k] % 58);
-					}
-					memcpy(buffer_b58,raw_baseminikey,21);
-					increment_minikey_N(raw_baseminikey);
-
-				}
-				else	{
-					memcpy(buffer_b58,raw_baseminikey,21);
-					increment_minikey_N(raw_baseminikey);
-				}
-#if defined(_WIN64) && !defined(__CYGWIN__)				
-				ReleaseMutex(write_random);
-#else
-				pthread_mutex_unlock(&write_random);
-#endif
-				
-			}
-		}
-		set_minikey(minikey2check+1,buffer_b58,21);
-		if(continue_flag)	{
-			count = 0;
-			if(FLAGMATRIX)	{
-					printf("[+] Base minikey: %s     \n",minikey2check);
-					fflush(stdout);
-			}
-			else	{
-				if(!FLAGQUIET)	{
-					printf("\r[+] Base minikey: %s     \r",minikey2check);
-					fflush(stdout);
-				}
-			}
-			do {
-				for(j = 0;j<256; j++)	{
-					
-					if(count_valid > 0)	{
-						for(k = 0; k < count_valid ; k++)	{
-							memcpy(minikeys[k],minikeys[4+k],22);
-						}
-					}
-					do	{
-						increment_minikey_index(minikey2check+1,buffer_b58,20);
-						memcpy(minikey[0]+1,minikey2check+1,21);
-						increment_minikey_index(minikey2check+1,buffer_b58,20);
-						memcpy(minikey[1]+1,minikey2check+1,21);
-						increment_minikey_index(minikey2check+1,buffer_b58,20);
-						memcpy(minikey[2]+1,minikey2check+1,21);
-						increment_minikey_index(minikey2check+1,buffer_b58,20);
-						memcpy(minikey[3]+1,minikey2check+1,21);
-						
-						sha256sse_23((uint8_t*)minikey[0],(uint8_t*)minikey[1],(uint8_t*)minikey[2],(uint8_t*)minikey[3],(uint8_t*)rawvalue[0],(uint8_t*)rawvalue[1],(uint8_t*)rawvalue[2],(uint8_t*)rawvalue[3]);
-						for(k = 0; k < 4; k++){
-							if(rawvalue[k][0] == 0x00)	{
-								memcpy(minikeys[count_valid],minikey[k],22);
-								count_valid++;
-							}
-						}
-					}while(count_valid < 4);
-					count_valid-=4;				
-					sha256sse_22((uint8_t*)minikeys[0],(uint8_t*)minikeys[1],(uint8_t*)minikeys[2],(uint8_t*)minikeys[3],(uint8_t*)rawvalue[0],(uint8_t*)rawvalue[1],(uint8_t*)rawvalue[2],(uint8_t*)rawvalue[3]);
-					
-					for(k = 0; k < 4; k++)	{
-						key_mpz[k].Set32Bytes((uint8_t*)rawvalue[k]);
-						publickey[k] = secp->ComputePublicKey(&key_mpz[k]);
-					}
-					
-					secp->GetHash160(P2PKH,false,publickey[0],publickey[1],publickey[2],publickey[3],(uint8_t*)publickeyhashrmd160_uncompress[0],(uint8_t*)publickeyhashrmd160_uncompress[1],(uint8_t*)publickeyhashrmd160_uncompress[2],(uint8_t*)publickeyhashrmd160_uncompress[3]);
-					
-					for(k = 0; k < 4; k++)	{
-						r = cuckoo_check(&cuckoo,publickeyhashrmd160_uncompress[k],20);
-						if(r) {
-							r = searchbinary(addressTable,publickeyhashrmd160_uncompress[k],N);
-							if(r) {
-								/* hit */
-								hextemp = key_mpz[k].GetBase16();
-								secp->GetPublicKeyHex(false,publickey[k],public_key_uncompressed_hex);
-#if defined(_WIN64) && !defined(__CYGWIN__)
-								WaitForSingleObject(write_keys, INFINITE);
-#else
-								pthread_mutex_lock(&write_keys);
-#endif
-							
-								keys = fopen("KEYFOUNDKEYFOUND.txt","a+");
-								rmd160toaddress_dst(publickeyhashrmd160_uncompress[k],address[k]);
-								minikeys[k][22] = '\0';
-								if(keys != NULL)	{
-									fprintf(keys,"Private Key: %s\npubkey: %s\nminikey: %s\naddress: %s\n",hextemp,public_key_uncompressed_hex,minikeys[k],address[k]);
-									fclose(keys);
-								}
-								printf("\nHIT!! Private Key: %s\npubkey: %s\nminikey: %s\naddress: %s\n",hextemp,public_key_uncompressed_hex,minikeys[k],address[k]);
-#if defined(_WIN64) && !defined(__CYGWIN__)
-								ReleaseMutex(write_keys);
-#else
-								pthread_mutex_unlock(&write_keys);
-#endif
-								
-								free(hextemp);
-							}
-						}
-					}
-				}
-				steps_add_relaxed(thread_number, 1);
-				count+=1024;
-			}while(count < N_SEQUENTIAL_MAX && continue_flag);
-		}
-	}while(continue_flag);
-	return NULL;
-}
 
 
 #if defined(_WIN64) && !defined(__CYGWIN__)
@@ -2924,20 +2644,12 @@ void *thread_process(void *vargp)	{
 		}
 		if(continue_flag)	{
 			count = 0;
-			if(FLAGMATRIX)	{
-					hextemp = key_mpz.GetBase16();
-					printf("Base key: %s thread %i\n",hextemp,thread_number);
-					fflush(stdout);
-					free(hextemp);
-			}
-			else	{
-				if(FLAGQUIET == 0){
-					hextemp = key_mpz.GetBase16();
-					printf("\rBase key: %s     \r",hextemp);
-					fflush(stdout);
-					free(hextemp);
-					THREADOUTPUT = 1;
-				}
+			if(FLAGQUIET == 0){
+				hextemp = key_mpz.GetBase16();
+				printf("\rBase key: %s     \r",hextemp);
+				fflush(stdout);
+				free(hextemp);
+				THREADOUTPUT = 1;
 			}
 			do {
 				temp_stride.SetInt32(CPU_GRP_SIZE / 2);
@@ -3396,442 +3108,7 @@ void *thread_process(void *vargp)	{
 }
 
 
-#if defined(_WIN64) && !defined(__CYGWIN__)
-DWORD WINAPI thread_process_vanity(LPVOID vargp) {
-#else
-void *thread_process_vanity(void *vargp)	{
-#endif
-	struct tothread *tt;
-	Point pts[CPU_GRP_SIZE];
-	Point endomorphism_beta[CPU_GRP_SIZE];
-	Point endomorphism_beta2[CPU_GRP_SIZE];
-	Point endomorphism_negeted_point[4];
-		
-	Int dx[CPU_GRP_SIZE / 2 + 1];
-	
-	IntGroup *grp = new IntGroup(CPU_GRP_SIZE / 2 + 1);
-	Point startP;
-	Int dy;
-	Int dyn;
-	Int _s;
-	Int _p;
-	Point pp;	//point positive
-	Point pn;	//point negative
-	int l,pp_offset,pn_offset,i,hLength = (CPU_GRP_SIZE / 2 - 1);
-	uint64_t j,count;
-	Point R,temporal,publickey;
-	int thread_number,continue_flag = 1,k;
-	char *hextemp = NULL;
-	char publickeyhashrmd160[20];
-	char publickeyhashrmd160_uncompress[4][20];
-	
-	char publickeyhashrmd160_endomorphism[12][4][20];
-	
-	Int key_mpz,temp_stride,keyfound;
-	tt = (struct tothread *)vargp;
-	thread_number = tt->nt;
-	free(tt);
-	grp->Set(dx);
-	
-	
-	//if FLAGENDOMORPHISM  == 1 and only compress search is enabled then there is no need to calculate the Y value value					
-	
-	bool calculate_y = FLAGSEARCH == SEARCH_UNCOMPRESS || FLAGSEARCH == SEARCH_BOTH;
-	
-	/*
-	if(FLAGDEBUG && thread_number == 0)	{
-		printf("[D] vanity_rmd_targets = %i          fillllll\n",vanity_rmd_targets);
-		printf("[D] vanity_rmd_total = %i\n",vanity_rmd_total);
-		for(i =0; i < vanity_rmd_targets;i++)	{
-			printf("[D] vanity_rmd_limits[%li] = %i\n",i,vanity_rmd_limits[i]);
-			
-		}
-		printf("[D] vanity_rmd_minimun_bytes_check_length = %i\n",vanity_rmd_minimun_bytes_check_length);
-	}
-	*/
-	
 
-	do {
-		if(FLAGRANDOM){
-			key_mpz.Rand(&n_range_start,&n_range_end);
-		}
-		else	{
-			if(n_range_start.IsLower(&n_range_end))	{
-#if defined(_WIN64) && !defined(__CYGWIN__)
-				WaitForSingleObject(write_random, INFINITE);
-				key_mpz.Set(&n_range_start);
-				n_range_start.Add(N_SEQUENTIAL_MAX);
-				ReleaseMutex(write_random);
-#else
-				pthread_mutex_lock(&write_random);
-				key_mpz.Set(&n_range_start);
-				n_range_start.Add(N_SEQUENTIAL_MAX);
-				pthread_mutex_unlock(&write_random);
-#endif
-			}
-			else	{
-				continue_flag = 0;
-			}
-		}
-		if(continue_flag)	{
-			count = 0;
-			if(FLAGMATRIX)	{
-					hextemp = key_mpz.GetBase16();
-					printf("Base key: %s thread %i\n",hextemp,thread_number);
-					fflush(stdout);
-					free(hextemp);
-			}
-			else	{
-				if(FLAGQUIET == 0)	{
-					hextemp = key_mpz.GetBase16();
-					printf("\rBase key: %s     \r",hextemp);
-					fflush(stdout);
-					free(hextemp);
-					THREADOUTPUT = 1;
-				}
-			}
-			do {
-				temp_stride.SetInt32(CPU_GRP_SIZE / 2);
-				temp_stride.Mult(&stride);
-				key_mpz.Add(&temp_stride);
-	 			startP = secp->ComputePublicKey(&key_mpz);
-				key_mpz.Sub(&temp_stride);
-
-				for(i = 0; i < hLength; i++) {
-					dx[i].ModSub(&Gn[i].x,&startP.x);
-				}
-			
-				dx[i].ModSub(&Gn[i].x,&startP.x);  // For the first point
-				dx[i + 1].ModSub(&_2Gn.x,&startP.x); // For the next center point
-				grp->ModInv();
-
-				pts[CPU_GRP_SIZE / 2] = startP;
-
-				for(i = 0; i<hLength; i++) {
-					pp = startP;
-					pn = startP;
-
-					// P = startP + i*G
-					dy.ModSub(&Gn[i].y,&pp.y);
-
-					_s.ModMulK1(&dy,&dx[i]);        // s = (p2.y-p1.y)*inverse(p2.x-p1.x);
-					_p.ModSquareK1(&_s);            // _p = pow2(s)
-
-					pp.x.ModNeg();
-					pp.x.ModAdd(&_p);
-					pp.x.ModSub(&Gn[i].x);           // rx = pow2(s) - p1.x - p2.x;
-					
-					if(calculate_y)	{
-						pp.y.ModSub(&Gn[i].x,&pp.x);
-						pp.y.ModMulK1(&_s);
-						pp.y.ModSub(&Gn[i].y);           // ry = - p2.y - s*(ret.x-p2.x);
-					}
-
-					// P = startP - i*G  , if (x,y) = i*G then (x,-y) = -i*G
-					dyn.Set(&Gn[i].y);
-					dyn.ModNeg();
-					dyn.ModSub(&pn.y);
-
-					_s.ModMulK1(&dyn,&dx[i]);      // s = (p2.y-p1.y)*inverse(p2.x-p1.x);
-					_p.ModSquareK1(&_s);            // _p = pow2(s)
-					pn.x.ModNeg();
-					pn.x.ModAdd(&_p);
-					pn.x.ModSub(&Gn[i].x);          // rx = pow2(s) - p1.x - p2.x;
-
-					if( calculate_y  )	{
-						pn.y.ModSub(&Gn[i].x,&pn.x);
-						pn.y.ModMulK1(&_s);
-						pn.y.ModAdd(&Gn[i].y);          // ry = - p2.y - s*(ret.x-p2.x);
-					}
-					pp_offset = CPU_GRP_SIZE / 2 + (i + 1);
-					pn_offset = CPU_GRP_SIZE / 2 - (i + 1);
-
-					pts[pp_offset] = pp;
-					pts[pn_offset] = pn;
-					
-					if(FLAGENDOMORPHISM)	{
-						/*
-							Q = (x,y)
-							For any point Q
-							Q*lambda = (x*beta mod p ,y)
-							Q*lambda is a Scalar Multiplication
-							x*beta is just a Multiplication (Very fast)
-						*/
-						
-						if( calculate_y  )	{
-							endomorphism_beta[pp_offset].y.Set(&pp.y);
-							endomorphism_beta[pn_offset].y.Set(&pn.y);
-							endomorphism_beta2[pp_offset].y.Set(&pp.y);
-							endomorphism_beta2[pn_offset].y.Set(&pn.y);
-						}
-						endomorphism_beta[pp_offset].x.ModMulK1(&pp.x, &beta);
-						endomorphism_beta[pn_offset].x.ModMulK1(&pn.x, &beta);
-						endomorphism_beta2[pp_offset].x.ModMulK1(&pp.x, &beta2);
-						endomorphism_beta2[pn_offset].x.ModMulK1(&pn.x, &beta2);
-					}
-				}
-				/*
-					Half point for endomorphism because pts[CPU_GRP_SIZE / 2] was not calcualte in the previous cycle
-				*/
-				if(FLAGENDOMORPHISM)	{
-					if( calculate_y  )	{
-
-						endomorphism_beta[CPU_GRP_SIZE / 2].y.Set(&pts[CPU_GRP_SIZE / 2].y);
-						endomorphism_beta2[CPU_GRP_SIZE / 2].y.Set(&pts[CPU_GRP_SIZE / 2].y);
-					}
-					endomorphism_beta[CPU_GRP_SIZE / 2].x.ModMulK1(&pts[CPU_GRP_SIZE / 2].x, &beta);
-					endomorphism_beta2[CPU_GRP_SIZE / 2].x.ModMulK1(&pts[CPU_GRP_SIZE / 2].x, &beta2);
-				}
-				
-				// First point (startP - (GRP_SZIE/2)*G)
-				pn = startP;
-				dyn.Set(&Gn[i].y);
-				dyn.ModNeg();
-				dyn.ModSub(&pn.y);
-
-				_s.ModMulK1(&dyn,&dx[i]);
-				_p.ModSquareK1(&_s);
-
-				pn.x.ModNeg();
-				pn.x.ModAdd(&_p);
-				pn.x.ModSub(&Gn[i].x);
-				
-				if(calculate_y )	{
-					pn.y.ModSub(&Gn[i].x,&pn.x);
-					pn.y.ModMulK1(&_s);
-					pn.y.ModAdd(&Gn[i].y);
-				}
-				pts[0] = pn;
-				
-				/*
-					First point for endomorphism because pts[0] was not calcualte previously
-				*/
-				if(FLAGENDOMORPHISM)	{
-					if( calculate_y  )	{
-						endomorphism_beta[0].y.Set(&pn.y);
-						endomorphism_beta2[0].y.Set(&pn.y);
-					}
-					endomorphism_beta[0].x.ModMulK1(&pn.x, &beta);
-					endomorphism_beta2[0].x.ModMulK1(&pn.x, &beta2);
-				}
-				
-				for(j = 0; j < CPU_GRP_SIZE/4;j++)	{
-					if(FLAGSEARCH == SEARCH_COMPRESS || FLAGSEARCH == SEARCH_BOTH ){
-						if(FLAGENDOMORPHISM)	{
-							secp->GetHash160_fromX(P2PKH,0x02,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[0][0],(uint8_t*)publickeyhashrmd160_endomorphism[0][1],(uint8_t*)publickeyhashrmd160_endomorphism[0][2],(uint8_t*)publickeyhashrmd160_endomorphism[0][3]);
-							secp->GetHash160_fromX(P2PKH,0x03,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[1][0],(uint8_t*)publickeyhashrmd160_endomorphism[1][1],(uint8_t*)publickeyhashrmd160_endomorphism[1][2],(uint8_t*)publickeyhashrmd160_endomorphism[1][3]);
-
-							secp->GetHash160_fromX(P2PKH,0x02,&endomorphism_beta[(j*4)].x,&endomorphism_beta[(j*4)+1].x,&endomorphism_beta[(j*4)+2].x,&endomorphism_beta[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[2][0],(uint8_t*)publickeyhashrmd160_endomorphism[2][1],(uint8_t*)publickeyhashrmd160_endomorphism[2][2],(uint8_t*)publickeyhashrmd160_endomorphism[2][3]);
-							secp->GetHash160_fromX(P2PKH,0x03,&endomorphism_beta[(j*4)].x,&endomorphism_beta[(j*4)+1].x,&endomorphism_beta[(j*4)+2].x,&endomorphism_beta[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[3][0],(uint8_t*)publickeyhashrmd160_endomorphism[3][1],(uint8_t*)publickeyhashrmd160_endomorphism[3][2],(uint8_t*)publickeyhashrmd160_endomorphism[3][3]);
-
-							secp->GetHash160_fromX(P2PKH,0x02,&endomorphism_beta2[(j*4)].x,&endomorphism_beta2[(j*4)+1].x,&endomorphism_beta2[(j*4)+2].x,&endomorphism_beta2[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[4][0],(uint8_t*)publickeyhashrmd160_endomorphism[4][1],(uint8_t*)publickeyhashrmd160_endomorphism[4][2],(uint8_t*)publickeyhashrmd160_endomorphism[4][3]);
-							secp->GetHash160_fromX(P2PKH,0x03,&endomorphism_beta2[(j*4)].x,&endomorphism_beta2[(j*4)+1].x,&endomorphism_beta2[(j*4)+2].x,&endomorphism_beta2[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[5][0],(uint8_t*)publickeyhashrmd160_endomorphism[5][1],(uint8_t*)publickeyhashrmd160_endomorphism[5][2],(uint8_t*)publickeyhashrmd160_endomorphism[5][3]);
-
-						}
-						else	{
-							secp->GetHash160_fromX(P2PKH,0x02,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[0][0],(uint8_t*)publickeyhashrmd160_endomorphism[0][1],(uint8_t*)publickeyhashrmd160_endomorphism[0][2],(uint8_t*)publickeyhashrmd160_endomorphism[0][3]);
-							secp->GetHash160_fromX(P2PKH,0x03,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[1][0],(uint8_t*)publickeyhashrmd160_endomorphism[1][1],(uint8_t*)publickeyhashrmd160_endomorphism[1][2],(uint8_t*)publickeyhashrmd160_endomorphism[1][3]);
-						}
-					}
-					if(FLAGSEARCH == SEARCH_UNCOMPRESS || FLAGSEARCH == SEARCH_BOTH)	{
-						if(FLAGENDOMORPHISM)	{
-							for(l = 0; l < 4; l++)	{
-								endomorphism_negeted_point[l] = secp->Negation(pts[(j*4)+l]);
-							}
-							secp->GetHash160(P2PKH,false, pts[(j*4)], pts[(j*4)+1], pts[(j*4)+2], pts[(j*4)+3],(uint8_t*)publickeyhashrmd160_endomorphism[6][0],(uint8_t*)publickeyhashrmd160_endomorphism[6][1],(uint8_t*)publickeyhashrmd160_endomorphism[6][2],(uint8_t*)publickeyhashrmd160_endomorphism[6][3]);
-							secp->GetHash160(P2PKH,false,endomorphism_negeted_point[0] ,endomorphism_negeted_point[1],endomorphism_negeted_point[2],endomorphism_negeted_point[3],(uint8_t*)publickeyhashrmd160_endomorphism[7][0],(uint8_t*)publickeyhashrmd160_endomorphism[7][1],(uint8_t*)publickeyhashrmd160_endomorphism[7][2],(uint8_t*)publickeyhashrmd160_endomorphism[7][3]);
-							for(l = 0; l < 4; l++)	{
-								endomorphism_negeted_point[l] = secp->Negation(endomorphism_beta[(j*4)+l]);
-							}
-							secp->GetHash160(P2PKH,false,endomorphism_beta[(j*4)],  endomorphism_beta[(j*4)+1], endomorphism_beta[(j*4)+2], endomorphism_beta[(j*4)+3] ,(uint8_t*)publickeyhashrmd160_endomorphism[8][0],(uint8_t*)publickeyhashrmd160_endomorphism[8][1],(uint8_t*)publickeyhashrmd160_endomorphism[8][2],(uint8_t*)publickeyhashrmd160_endomorphism[8][3]);
-							secp->GetHash160(P2PKH,false,endomorphism_negeted_point[0],endomorphism_negeted_point[1],endomorphism_negeted_point[2],endomorphism_negeted_point[3],(uint8_t*)publickeyhashrmd160_endomorphism[9][0],(uint8_t*)publickeyhashrmd160_endomorphism[9][1],(uint8_t*)publickeyhashrmd160_endomorphism[9][2],(uint8_t*)publickeyhashrmd160_endomorphism[9][3]);
-
-							for(l = 0; l < 4; l++)	{
-								endomorphism_negeted_point[l] = secp->Negation(endomorphism_beta2[(j*4)+l]);
-							}
-							secp->GetHash160(P2PKH,false, endomorphism_beta2[(j*4)],  endomorphism_beta2[(j*4)+1] ,  endomorphism_beta2[(j*4)+2] ,  endomorphism_beta2[(j*4)+3] ,(uint8_t*)publickeyhashrmd160_endomorphism[10][0],(uint8_t*)publickeyhashrmd160_endomorphism[10][1],(uint8_t*)publickeyhashrmd160_endomorphism[10][2],(uint8_t*)publickeyhashrmd160_endomorphism[10][3]);
-							secp->GetHash160(P2PKH,false, endomorphism_negeted_point[0], endomorphism_negeted_point[1],   endomorphism_negeted_point[2],endomorphism_negeted_point[3],(uint8_t*)publickeyhashrmd160_endomorphism[11][0],(uint8_t*)publickeyhashrmd160_endomorphism[11][1],(uint8_t*)publickeyhashrmd160_endomorphism[11][2],(uint8_t*)publickeyhashrmd160_endomorphism[11][3]);
-						}
-						else	{
-							secp->GetHash160(P2PKH,false,pts[(j*4)],pts[(j*4)+1],pts[(j*4)+2],pts[(j*4)+3],(uint8_t*)publickeyhashrmd160_uncompress[0],(uint8_t*)publickeyhashrmd160_uncompress[1],(uint8_t*)publickeyhashrmd160_uncompress[2],(uint8_t*)publickeyhashrmd160_uncompress[3]);
-							
-						}
-					}
-					for(k = 0; k < 4;k++)	{
-						if(FLAGSEARCH == SEARCH_COMPRESS || FLAGSEARCH == SEARCH_BOTH ){
-							if(FLAGENDOMORPHISM)	{
-								for(l = 0;l < 6; l++)	{
-									if(vanityrmdmatch((uint8_t*)publickeyhashrmd160_endomorphism[l][k]))	{
-										// Here the given publickeyhashrmd160 match againts one of the vanity targets
-										// We need to check which of the cases is it.
-
-										keyfound.SetInt32(k);
-										keyfound.Mult(&stride);
-										keyfound.Add(&key_mpz);
-										publickey = secp->ComputePublicKey(&keyfound);
-										
-										switch(l)	{
-											case 0:	//Original point, prefix 02
-												if(publickey.y.IsOdd())	{	//if the current publickey is odd that means, we need to negate the keyfound to get the correct key
-													keyfound.Neg();
-													keyfound.Add(&secp->order);
-												}
-												// else we dont need to chage the current keyfound because it already have prefix 02
-											break;
-											case 1:	//Original point, prefix 03
-												if(publickey.y.IsEven())	{	//if the current publickey is even that means, we need to negate the keyfound to get the correct key
-													keyfound.Neg();
-													keyfound.Add(&secp->order);
-												}
-												// else we dont need to chage the current keyfound because it already have prefix 03
-											break;
-											case 2:	//Beta point, prefix 02
-												keyfound.ModMulK1order(&lambda);
-												if(publickey.y.IsOdd())	{	//if the current publickey is odd that means, we need to negate the keyfound to get the correct key
-													keyfound.Neg();
-													keyfound.Add(&secp->order);
-												}
-												// else we dont need to chage the current keyfound because it already have prefix 02
-											break;
-											case 3:	//Beta point, prefix 03											
-												keyfound.ModMulK1order(&lambda);
-												if(publickey.y.IsEven())	{	//if the current publickey is even that means, we need to negate the keyfound to get the correct key
-													keyfound.Neg();
-													keyfound.Add(&secp->order);
-												}
-												// else we dont need to chage the current keyfound because it already have prefix 02
-											break;
-											case 4:	//Beta^2 point, prefix 02
-												keyfound.ModMulK1order(&lambda2);
-												if(publickey.y.IsOdd())	{	//if the current publickey is odd that means, we need to negate the keyfound to get the correct key
-													keyfound.Neg();
-													keyfound.Add(&secp->order);
-												}
-												// else we dont need to chage the current keyfound because it already have prefix 02
-											break;
-											case 5:	//Beta^2 point, prefix 03
-												keyfound.ModMulK1order(&lambda2);
-												if(publickey.y.IsEven())	{	//if the current publickey is even that means, we need to negate the keyfound to get the correct key
-													keyfound.Neg();
-													keyfound.Add(&secp->order);
-												}
-												// else we dont need to chage the current keyfound because it already have prefix 02
-											break;
-										}
-										writevanitykey(true,&keyfound);
-									}
-								}
-							}
-							else	{
-								for(l = 0;l < 2; l++)	{
-									if(vanityrmdmatch((uint8_t*)publickeyhashrmd160_endomorphism[l][k]))	{
-										keyfound.SetInt32(k);
-										keyfound.Mult(&stride);
-										keyfound.Add(&key_mpz);
-										
-										publickey = secp->ComputePublicKey(&keyfound);
-										secp->GetHash160(P2PKH,true,publickey,(uint8_t*)publickeyhashrmd160);
-										if(memcmp(publickeyhashrmd160_endomorphism[l][k],publickeyhashrmd160,20) != 0){
-											keyfound.Neg();
-											keyfound.Add(&secp->order);
-											//if(FLAGDEBUG) printf("[D] Key need to be negated\n");
-										}
-										writevanitykey(true,&keyfound);
-									}
-								}									
-							}
-						}
-						if(FLAGSEARCH == SEARCH_UNCOMPRESS || FLAGSEARCH == SEARCH_BOTH)	{
-							if(FLAGENDOMORPHISM)	{
-								for(l = 6;l < 12; l++)	{
-									if(vanityrmdmatch((uint8_t*)publickeyhashrmd160_endomorphism[l][k]))	{
-										// Here the given publickeyhashrmd160 match againts one of the vanity targets
-										// We need to check which of the cases is it.
-
-										//rmd160toaddress_dst(publickeyhashrmd160_endomorphism[l][k],address);
-										keyfound.SetInt32(k);
-										keyfound.Mult(&stride);
-										keyfound.Add(&key_mpz);
-										
-										
-										switch(l)	{
-											case 6:
-											case 7:
-												publickey = secp->ComputePublicKey(&keyfound);
-												secp->GetHash160(P2PKH,false,publickey,(uint8_t*)publickeyhashrmd160_uncompress[0]);
-												if(memcmp(publickeyhashrmd160_endomorphism[l][k],publickeyhashrmd160_uncompress[0],20) != 0){
-													keyfound.Neg();
-													keyfound.Add(&secp->order);
-												}
-											break;
-											case 8:
-											case 9:
-												keyfound.ModMulK1order(&lambda);
-												publickey = secp->ComputePublicKey(&keyfound);
-												secp->GetHash160(P2PKH,false,publickey,(uint8_t*)publickeyhashrmd160_uncompress[0]);
-												if(memcmp(publickeyhashrmd160_endomorphism[l][k],publickeyhashrmd160_uncompress[0],20) != 0){
-													keyfound.Neg();
-													keyfound.Add(&secp->order);
-												}
-											break;
-											case 10:
-											case 11:
-												keyfound.ModMulK1order(&lambda2);
-												publickey = secp->ComputePublicKey(&keyfound);
-												secp->GetHash160(P2PKH,false,publickey,(uint8_t*)publickeyhashrmd160_uncompress[0]);
-												if(memcmp(publickeyhashrmd160_endomorphism[l][k],publickeyhashrmd160_uncompress[0],20) != 0){
-													keyfound.Neg();
-													keyfound.Add(&secp->order);
-												}
-											break;
-										}
-										writevanitykey(false,&keyfound);
-									}
-								}
-
-							}
-							else	{
-								if(vanityrmdmatch((uint8_t*)publickeyhashrmd160_uncompress[k]))	{
-									keyfound.SetInt32(k);
-									keyfound.Mult(&stride);
-									keyfound.Add(&key_mpz);
-									writevanitykey(false,&keyfound);
-								}
-							}
-						}
-						
-					}
-
-					count+=4;
-					temp_stride.SetInt32(4);
-					temp_stride.Mult(&stride);
-					key_mpz.Add(&temp_stride);
-				}
-				steps_add_relaxed(thread_number, 1);
-
-				// Next start point (startP + GRP_SIZE*G)
-				pp = startP;
-				dy.ModSub(&_2Gn.y,&pp.y);
-
-				_s.ModMulK1(&dy,&dx[i + 1]);
-				_p.ModSquareK1(&_s);
-
-				pp.x.ModNeg();
-				pp.x.ModAdd(&_p);
-				pp.x.ModSub(&_2Gn.x);
-				
-				//The Y value for the next start point always need to be calculated
-				pp.y.ModSub(&_2Gn.x,&pp.x);
-				pp.y.ModMulK1(&_s);
-				pp.y.ModSub(&_2Gn.y);
-				startP = pp;
-			}while(count < N_SEQUENTIAL_MAX && continue_flag);
-		}
-	} while(continue_flag);
-	delete grp;
-	ends_store_release(thread_number, 1);
-	return NULL;
-}
 
 void _swap(struct address_value *a,struct address_value *b)	{
 	struct address_value t;
@@ -4191,20 +3468,12 @@ void *thread_process_bsgs(void *vargp)	{
 		if(base_key.IsGreaterOrEqual(&n_range_end))
 			break;
 		
-		if(FLAGMATRIX)	{
+		if(FLAGQUIET == 0){
 			aux_c = base_key.GetBase16();
-			printf("[+] Thread 0x%s \n",aux_c);
+			printf("\r[+] Thread 0x%s   \r",aux_c);
 			fflush(stdout);
 			free(aux_c);
-		}
-		else	{
-			if(FLAGQUIET == 0){
-				aux_c = base_key.GetBase16();
-				printf("\r[+] Thread 0x%s   \r",aux_c);
-				fflush(stdout);
-				free(aux_c);
-				THREADOUTPUT = 1;
-			}
+			THREADOUTPUT = 1;
 		}
 		base_point = secp->ComputePublicKey(&base_key);
 		km.Set(&base_key);
@@ -4306,7 +3575,7 @@ pn.y.ModAdd(&GSn[i].y);
 								pthread_mutex_lock(&write_keys);
 #endif
 
-								filekey = fopen("KEYFOUNDKEYFOUND.txt","a");
+								filekey = fopen("FOUND_KEYS.txt","a");
 								if(filekey != NULL)	{
 									fprintf(filekey,"Key found privkey %s\nPublickey %s\n",hextemp,aux_c);
 									fclose(filekey);
@@ -4409,20 +3678,12 @@ void *thread_process_bsgs_random(void *vargp)	{
 		pthread_mutex_unlock(&bsgs_thread);
 #endif
 
-		if(FLAGMATRIX)	{
-				aux_c = base_key.GetBase16();
-				printf("[+] Thread 0x%s  \n",aux_c);
-				fflush(stdout);
-				free(aux_c);
-		}
-		else{
-			if(FLAGQUIET == 0){
-				aux_c = base_key.GetBase16();
-				printf("\r[+] Thread 0x%s  \r",aux_c);
-				fflush(stdout);
-				free(aux_c);
-				THREADOUTPUT = 1;
-			}
+		if(FLAGQUIET == 0){
+			aux_c = base_key.GetBase16();
+			printf("\r[+] Thread 0x%s  \r",aux_c);
+			fflush(stdout);
+			free(aux_c);
+			THREADOUTPUT = 1;
 		}
 		base_point = secp->ComputePublicKey(&base_key);
 
@@ -4543,7 +3804,7 @@ pn.y.ModAdd(&GSn[i].y);
 								pthread_mutex_lock(&write_keys);
 #endif
 
-								filekey = fopen("KEYFOUNDKEYFOUND.txt","a");
+								filekey = fopen("FOUND_KEYS.txt","a");
 								if(filekey != NULL)	{
 									fprintf(filekey,"Key found privkey %s\nPublickey %s\n",hextemp,aux_c);
 									fclose(filekey);
@@ -5296,20 +4557,12 @@ void *thread_process_bsgs_dance(void *vargp)	{
 		if(entrar == 0)
 			break;
 			
-		if(FLAGMATRIX)	{
+		if(FLAGQUIET == 0){
 			aux_c = base_key.GetBase16();
-			printf("[+] Thread 0x%s \n",aux_c);
+			printf("\r[+] Thread 0x%s   \r",aux_c);
 			fflush(stdout);
 			free(aux_c);
-		}
-		else	{
-			if(FLAGQUIET == 0){
-				aux_c = base_key.GetBase16();
-				printf("\r[+] Thread 0x%s   \r",aux_c);
-				fflush(stdout);
-				free(aux_c);
-				THREADOUTPUT = 1;
-			}
+			THREADOUTPUT = 1;
 		}
 		
 		base_point = secp->ComputePublicKey(&base_key);
@@ -5429,7 +4682,7 @@ pn.y.ModAdd(&GSn[i].y);
 								pthread_mutex_lock(&write_keys);
 #endif
 
-								filekey = fopen("KEYFOUNDKEYFOUND.txt","a");
+								filekey = fopen("FOUND_KEYS.txt","a");
 								if(filekey != NULL)	{
 									fprintf(filekey,"Key found privkey %s\nPublickey %s\n",hextemp,aux_c);
 									fclose(filekey);
@@ -5553,20 +4806,12 @@ void *thread_process_bsgs_backward(void *vargp)	{
 		if(entrar == 0)
 			break;
 		
-		if(FLAGMATRIX)	{
+		if(FLAGQUIET == 0){
 			aux_c = base_key.GetBase16();
-			printf("[+] Thread 0x%s \n",aux_c);
+			printf("\r[+] Thread 0x%s   \r",aux_c);
 			fflush(stdout);
 			free(aux_c);
-		}
-		else	{
-			if(FLAGQUIET == 0){
-				aux_c = base_key.GetBase16();
-				printf("\r[+] Thread 0x%s   \r",aux_c);
-				fflush(stdout);
-				free(aux_c);
-				THREADOUTPUT = 1;
-			}
+			THREADOUTPUT = 1;
 		}
 		
 		base_point = secp->ComputePublicKey(&base_key);
@@ -5684,7 +4929,7 @@ pn.y.ModAdd(&GSn[i].y);
 								pthread_mutex_lock(&write_keys);
 #endif
 
-								filekey = fopen("KEYFOUNDKEYFOUND.txt","a");
+								filekey = fopen("FOUND_KEYS.txt","a");
 								if(filekey != NULL)	{
 									fprintf(filekey,"Key found privkey %s\nPublickey %s\n",hextemp,aux_c);
 									fclose(filekey);
@@ -5835,20 +5080,12 @@ void *thread_process_bsgs_both(void *vargp)	{
 			break;
 
 		
-		if(FLAGMATRIX)	{
+		if(FLAGQUIET == 0){
 			aux_c = base_key.GetBase16();
-			printf("[+] Thread 0x%s \n",aux_c);
+			printf("\r[+] Thread 0x%s   \r",aux_c);
 			fflush(stdout);
 			free(aux_c);
-		}
-		else	{
-			if(FLAGQUIET == 0){
-				aux_c = base_key.GetBase16();
-				printf("\r[+] Thread 0x%s   \r",aux_c);
-				fflush(stdout);
-				free(aux_c);
-				THREADOUTPUT = 1;
-			}
+			THREADOUTPUT = 1;
 		}
 		
 		base_point = secp->ComputePublicKey(&base_key);
@@ -5966,7 +5203,7 @@ void *thread_process_bsgs_both(void *vargp)	{
 									pthread_mutex_lock(&write_keys);
 #endif
 
-									filekey = fopen("KEYFOUNDKEYFOUND.txt","a");
+									filekey = fopen("FOUND_KEYS.txt","a");
 									if(filekey != NULL)	{
 										fprintf(filekey,"Key found privkey %s\nPublickey %s\n",hextemp,aux_c);
 										fclose(filekey);
@@ -6025,366 +5262,32 @@ rawbuffer: a pointer to a char array that contains the raw data.
 length: an integer representing the length of the raw data.
 The function is designed to convert the raw data using a lookup table (Ccoinbuffer) and store the result in the buffer. 
 */
-void set_minikey(char *buffer,char *rawbuffer,int length)	{
-	for(int i = 0;  i < length; i++)	{
-		buffer[i] = Ccoinbuffer[(uint8_t)rawbuffer[i]];
-	}
-}
-
-/* This function takes in three parameters:
-
-buffer: a pointer to a char array where the minikey will be stored.
-rawbuffer: a pointer to a char array that contains the raw data.
-index: an integer representing the index of the raw data array to be incremented.
-The function is designed to increment the value at the specified index in the raw data array,
-and update the corresponding value in the buffer using a lookup table (Ccoinbuffer).
-If the value at the specified index exceeds 57, it is reset to 0x00 and the function recursively
-calls itself to increment the value at the previous index, unless the index is already 0, in which
-case the function returns false. The function returns true otherwise. 
-*/
-
-bool increment_minikey_index(char *buffer,char *rawbuffer,int index)	{
-	if(rawbuffer[index] < 57){
-		rawbuffer[index]++;
-		buffer[index] = Ccoinbuffer[(uint8_t)rawbuffer[index]];
-	}
-	else	{
-		rawbuffer[index] = 0x00;
-		buffer[index] = Ccoinbuffer[0];
-		if(index>0)	{
-			return increment_minikey_index(buffer,rawbuffer,index-1);
-		}
-		else	{
-			return false;
-		}
-	}
-	return true;
-}
-
-/* This function takes in a single parameter:
-
-rawbuffer: a pointer to a char array that contains the raw data.
-The function is designed to increment the values in the raw data array
-using a lookup table (minikeyN), while also handling carry-over to the
-previous element in the array if necessary. The maximum number of iterations
-is limited by minikey_n_limit. 
 
 
-*/
-void increment_minikey_N(char *rawbuffer)	{
-	int i = 20,j = 0;
-	while( i > 0 && j < minikey_n_limit)	{
-		rawbuffer[i] = rawbuffer[i] + minikeyN[i];
-		if(rawbuffer[i] > 57)	{	 // Handling carry-over if value exceeds 57
-			rawbuffer[i] = rawbuffer[i] % 58;
-			rawbuffer[i-1]++;
-		}
-		i--;
-		j++;
-	}
-}
 
 
-#define BUFFMINIKEY(buff,src) \
-(buff)[ 0] = (uint32_t)src[ 0] << 24 | (uint32_t)src[ 1] << 16 | (uint32_t)src[ 2] << 8 | (uint32_t)src[ 3]; \
-(buff)[ 1] = (uint32_t)src[ 4] << 24 | (uint32_t)src[ 5] << 16 | (uint32_t)src[ 6] << 8 | (uint32_t)src[ 7]; \
-(buff)[ 2] = (uint32_t)src[ 8] << 24 | (uint32_t)src[ 9] << 16 | (uint32_t)src[10] << 8 | (uint32_t)src[11]; \
-(buff)[ 3] = (uint32_t)src[12] << 24 | (uint32_t)src[13] << 16 | (uint32_t)src[14] << 8 | (uint32_t)src[15]; \
-(buff)[ 4] = (uint32_t)src[16] << 24 | (uint32_t)src[17] << 16 | (uint32_t)src[18] << 8 | (uint32_t)src[19]; \
-(buff)[ 5] = (uint32_t)src[20] << 24 | (uint32_t)src[21] << 16 | 0x8000; \
-(buff)[ 6] = 0; \
-(buff)[ 7] = 0; \
-(buff)[ 8] = 0; \
-(buff)[ 9] = 0; \
-(buff)[10] = 0; \
-(buff)[11] = 0; \
-(buff)[12] = 0; \
-(buff)[13] = 0; \
-(buff)[14] = 0; \
-(buff)[15] = 0xB0;	//176 bits => 22 BYTES
-
-
-void sha256sse_22(uint8_t *src0, uint8_t *src1, uint8_t *src2, uint8_t *src3, uint8_t *dst0, uint8_t *dst1, uint8_t *dst2, uint8_t *dst3)	{
-  uint32_t b0[16];
-  uint32_t b1[16];
-  uint32_t b2[16];
-  uint32_t b3[16];
-  BUFFMINIKEY(b0, src0);
-  BUFFMINIKEY(b1, src1);
-  BUFFMINIKEY(b2, src2);
-  BUFFMINIKEY(b3, src3);
-  sha256sse_1B(b0, b1, b2, b3, dst0, dst1, dst2, dst3);
-}
-
-
-#define BUFFMINIKEYCHECK(buff,src) \
-(buff)[ 0] = (uint32_t)src[ 0] << 24 | (uint32_t)src[ 1] << 16 | (uint32_t)src[ 2] << 8 | (uint32_t)src[ 3]; \
-(buff)[ 1] = (uint32_t)src[ 4] << 24 | (uint32_t)src[ 5] << 16 | (uint32_t)src[ 6] << 8 | (uint32_t)src[ 7]; \
-(buff)[ 2] = (uint32_t)src[ 8] << 24 | (uint32_t)src[ 9] << 16 | (uint32_t)src[10] << 8 | (uint32_t)src[11]; \
-(buff)[ 3] = (uint32_t)src[12] << 24 | (uint32_t)src[13] << 16 | (uint32_t)src[14] << 8 | (uint32_t)src[15]; \
-(buff)[ 4] = (uint32_t)src[16] << 24 | (uint32_t)src[17] << 16 | (uint32_t)src[18] << 8 | (uint32_t)src[19]; \
-(buff)[ 5] = (uint32_t)src[20] << 24 | (uint32_t)src[21] << 16 | (uint32_t)src[22] << 8 | 0x80; \
-(buff)[ 6] = 0; \
-(buff)[ 7] = 0; \
-(buff)[ 8] = 0; \
-(buff)[ 9] = 0; \
-(buff)[10] = 0; \
-(buff)[11] = 0; \
-(buff)[12] = 0; \
-(buff)[13] = 0; \
-(buff)[14] = 0; \
-(buff)[15] = 0xB8;	//184 bits => 23 BYTES
-
-void sha256sse_23(uint8_t *src0, uint8_t *src1, uint8_t *src2, uint8_t *src3, uint8_t *dst0, uint8_t *dst1, uint8_t *dst2, uint8_t *dst3)	{
-  uint32_t b0[16];
-  uint32_t b1[16];
-  uint32_t b2[16];
-  uint32_t b3[16];
-  BUFFMINIKEYCHECK(b0, src0);
-  BUFFMINIKEYCHECK(b1, src1);
-  BUFFMINIKEYCHECK(b2, src2);
-  BUFFMINIKEYCHECK(b3, src3);
-  sha256sse_1B(b0, b1, b2, b3, dst0, dst1, dst2, dst3);
-}
 
 void menu() {
 	printf("\nUsage:\n");
-	printf("-h          show this help\n");
-	printf("-A profile  Auto-detects hardware and applies tuning (safe|balanced|max|benchmark)\n");
-	printf("-R Mode     BSGS modes <sequential, backward, both, random, dance>\n");
-	printf("-b bits     For some puzzles you only need some numbers of bits in the test keys.\n");
-	printf("-c crypto   Search for specific crypto. <btc, eth> valid only w/ -m address\n");
-	printf("-C mini     Set the minikey Base only 22 character minikeys, ex: SRPqx8QiwnW4WNWnTVa2W5\n");
-	printf("-8 alpha    Set the bas58 alphabet for minikeys\n");
-	printf("-e          Enable endomorphism search (Only for address, rmd160 and vanity)\n");
-	printf("-f file     Specify file name with addresses or xpoints or uncompressed public keys\n");
-	printf("-I stride   Stride for xpoint, rmd160 and address, this option don't work with bsgs\n");
-	printf("-k value    Use this only with bsgs mode, k value is factor for M, more speed but more RAM use wisely\n");
-	printf("-l look     What type of address/hash160 are you looking for <compress, uncompress, both> Only for rmd160 and address\n");
-	printf("-m mode     mode of search for cryptos. (bsgs, xpoint, rmd160, address, vanity) default: address\n");
-	printf("-M          Matrix screen, feel like a h4x0r, but performance will dropped\n");
-	printf("-n number   Check for N sequential numbers before the random chosen, this only works with -R option\n");
-	printf("            Use -n to set the N for the BSGS process. Bigger N more RAM needed\n");
-	printf("-q          Quiet the thread output\n");
-	printf("-r SR:EN    StarRange:EndRange, the end range can be omitted for search from start range to N-1 ECC value\n");
-	printf("-s ns       Number of seconds for the stats output, 0 to omit output.\n");
-	printf("-S          S is for SAVING in files BSGS data (Cuckoo filters and bPtable)\n");
-	printf("-6          to skip sha256 Checksum on data files");
-	printf("-t tn       Threads number, must be a positive integer\n");
-	printf("-v value    Search for vanity Address, only with -m vanity\n");
-	printf("-z value    Cuckoo size multiplier, only address,rmd160,vanity, xpoint, value >= 1\n");
+	printf("-h           Show this help\n");
+	printf("-m mode      Search mode: address, bsgs (default)\n");
+	printf("-f file      File with target addresses or public keys\n");
+	printf("-b bits      Bit range (e.g., 66 for puzzle 66)\n");
+	printf("-t threads   Number of threads to use\n");
+	printf("-R mode      Search strategy: sequential (default), backward, both, random, dance\n");
+	printf("-l type      Search type: compress, uncompress, both (default)\n");
+	printf("-A profile   Auto-tuning: safe, balanced (default), max\n");
+	printf("-k value     K factor for BSGS (factor for M, more speed but more RAM)\n");
+	printf("-q           Quiet mode (reduce terminal output)\n");
+	printf("-s seconds   Stats interval in seconds (0 to disable)\n");
+	printf("-S           Save Cuckoo filters/bPtable for faster restarts\n");
+	printf("-6           Skip checksum validation on filters\n");
 	printf("\nExample:\n\n");
-	printf("./modo-bsgs -m bsgs -f addresses.txt -b 66 -R random -q -t 8\n\n");
-	printf("This line runs the program with 8 threads for a 66-bit search using random mode without stats output\n\n");
+	printf("./modo-bsgs -f addresses.txt -b 66 -R random -q -t 8\n\n");
 	exit(0);
 }
 
-bool vanityrmdmatch(unsigned char *rmdhash)	{
-	bool r = false;
-	int i,j,cmpA,cmpB,result;
-	result = cuckoo_check(vanity_cuckoo,rmdhash,vanity_rmd_minimun_bytes_check_length);
-	switch(result)	{
-		case -1:
-			fprintf(stderr,"[E] Cuckoo is not initialized\n");
-			exit(EXIT_FAILURE);
-		break;
-		case 1:
-			for(i = 0; i < vanity_rmd_targets && !r;i++)	{
-				for(j = 0; j < vanity_rmd_limits[i] && !r; j++)	{
-					cmpA = memcmp(vanity_rmd_limit_values_A[i][j],rmdhash,20);
-					cmpB = memcmp(vanity_rmd_limit_values_B[i][j],rmdhash,20);
-					if(cmpA <= 0 && cmpB >= 0)	{
-						//if(FLAGDEBUG ) printf("\n\n[D] cmpA = %i, cmpB = %i \n\n",cmpA,cmpB);
-						r = true;
-					}
-				}
-			}
-		break;
-		default:
-			r = false;
-		break;
-	}
-	return r;
-}
 
-void writevanitykey(bool compressed,Int *key)	{
-	Point publickey;
-	FILE *keys;
-	char *hextemp,*hexrmd,public_key_hex[131],address[50],rmdhash[20];
-	hextemp = key->GetBase16();
-	publickey = secp->ComputePublicKey(key);
-	secp->GetPublicKeyHex(compressed,publickey,public_key_hex);
-	
-	secp->GetHash160(P2PKH,compressed,publickey,(uint8_t*)rmdhash);
-	hexrmd = tohex(rmdhash,20);
-	rmd160toaddress_dst(rmdhash,address);
-	
-#if defined(_WIN64) && !defined(__CYGWIN__)
-	WaitForSingleObject(write_keys, INFINITE);
-#else
-	pthread_mutex_lock(&write_keys);
-#endif
-	keys = fopen("VANITYKEYFOUND.txt","a+");
-	if(keys != NULL)	{
-		fprintf(keys,"Vanity Private Key: %s\npubkey: %s\nAddress %s\nrmd160 %s\n",hextemp,public_key_hex,address,hexrmd);
-		fclose(keys);
-	}
-	printf("\nVanity Private Key: %s\npubkey: %s\nAddress %s\nrmd160 %s\n",hextemp,public_key_hex,address,hexrmd);
-	
-#if defined(_WIN64) && !defined(__CYGWIN__)
-	ReleaseMutex(write_keys);
-#else
-	pthread_mutex_unlock(&write_keys);
-#endif
-	free(hextemp);
-	free(hexrmd);
-}
-
-
-int addvanity(char *target)	{
-	unsigned char raw_value_A[50],raw_value_B[50];
-	char target_copy[50];
-	int stringsize,targetsize,j,r = 0;
-	size_t raw_value_length;
-	int values_A_size = 0,values_B_size = 0,minimun_bytes;
-	raw_value_length = 50;
-	targetsize = strlen(target);
-	stringsize = targetsize;
-	memset(raw_value_A,0,50);
-	memset(target_copy,0,50);
-	if(targetsize >= 30 )	{
-		return 0;
-	}
-	memcpy(target_copy,target,targetsize);
-	j = 0;
-	vanity_address_targets = (char**)  realloc(vanity_address_targets,(vanity_rmd_targets+1) * sizeof(char*));
-	vanity_address_targets[vanity_rmd_targets] = NULL;
-	checkpointer((void *)vanity_address_targets,__FILE__,"realloc","vanity_address_targets" ,__LINE__ -1 );
-	vanity_rmd_limits = (int*) realloc(vanity_rmd_limits,(vanity_rmd_targets+1) * sizeof(int));
-	vanity_rmd_limits[vanity_rmd_targets] = 0;
-	checkpointer((void *)vanity_rmd_limits,__FILE__,"realloc","vanity_rmd_limits" ,__LINE__ -1 );
-	vanity_rmd_limit_values_A = (uint8_t***)realloc(vanity_rmd_limit_values_A,(vanity_rmd_targets+1) * sizeof(unsigned char *));
-	checkpointer((void *)vanity_rmd_limit_values_A,__FILE__,"realloc","vanity_rmd_limit_values_A" ,__LINE__ -1 );
-	vanity_rmd_limit_values_A[vanity_rmd_targets] = NULL;
-	vanity_rmd_limit_values_B = (uint8_t***)realloc(vanity_rmd_limit_values_B,(vanity_rmd_targets+1) * sizeof(unsigned char *));
-	checkpointer((void *)vanity_rmd_limit_values_B,__FILE__,"realloc","vanity_rmd_limit_values_B" ,__LINE__ -1 );
-	vanity_rmd_limit_values_B[vanity_rmd_targets] = NULL;
-	do	{
-		raw_value_length = 50;
-		b58tobin(raw_value_A,&raw_value_length,target_copy,stringsize);
-		if(raw_value_length < 25)	{
-			target_copy[stringsize] = '1';
-			stringsize++;
-		}
-		if(raw_value_length == 25)	{
-			b58tobin(raw_value_A,&raw_value_length,target_copy,stringsize);
-			
-			vanity_rmd_limit_values_A[vanity_rmd_targets] = (uint8_t**)realloc(vanity_rmd_limit_values_A[vanity_rmd_targets],(j+1) * sizeof(unsigned char *));
-			checkpointer((void *)vanity_rmd_limit_values_A[vanity_rmd_targets],__FILE__,"realloc","vanity_rmd_limit_values_A" ,__LINE__ -1 );
-			vanity_rmd_limit_values_A[vanity_rmd_targets][j] = (uint8_t*)calloc(20,1);
-			checkpointer((void *)vanity_rmd_limit_values_A[vanity_rmd_targets][j],__FILE__,"realloc","vanity_rmd_limit_values_A" ,__LINE__ -1 );
-			
-			memcpy(vanity_rmd_limit_values_A[vanity_rmd_targets][j] ,raw_value_A +1,20);
-			
-			j++;	
-			values_A_size = j;
-			target_copy[stringsize] = '1';
-			stringsize++;
-		}	
-	}while(raw_value_length <= 25);
-	
-	stringsize = targetsize;
-	memset(raw_value_B,0,50);
-	memset(target_copy,0,50);
-	memcpy(target_copy,target,targetsize);
-
-	j = 0;
-	do	{
-		raw_value_length = 50;
-		b58tobin(raw_value_B,&raw_value_length,target_copy,stringsize);
-		if(raw_value_length < 25)	{
-			target_copy[stringsize] = 'z';
-			stringsize++;
-		}
-		if(raw_value_length == 25)	{
-			
-			b58tobin(raw_value_B,&raw_value_length,target_copy,stringsize);
-			vanity_rmd_limit_values_B[vanity_rmd_targets] = (uint8_t**)realloc(vanity_rmd_limit_values_B[vanity_rmd_targets],(j+1) * sizeof(unsigned char *));
-			checkpointer((void *)vanity_rmd_limit_values_B[vanity_rmd_targets],__FILE__,"realloc","vanity_rmd_limit_values_B" ,__LINE__ -1 );
-			checkpointer((void *)vanity_rmd_limit_values_B[vanity_rmd_targets],__FILE__,"realloc","vanity_rmd_limit_values_B" ,__LINE__ -1 );
-			vanity_rmd_limit_values_B[vanity_rmd_targets][j] = (uint8_t*)calloc(20,1);
-			checkpointer((void *)vanity_rmd_limit_values_B[vanity_rmd_targets][j],__FILE__,"calloc","vanity_rmd_limit_values_B" ,__LINE__ -1 );
-			memcpy(vanity_rmd_limit_values_B[vanity_rmd_targets][j],raw_value_B+1,20);
-			
-			j++;				
-			values_B_size = j;
-			
-			target_copy[stringsize] = 'z';
-			stringsize++;
-		}
-	}while(raw_value_length <= 25);
-	
-	if(values_A_size >= 1 && values_B_size >= 1)	{
-		if(values_A_size != values_B_size)	{
-			if(values_A_size > values_B_size)
-				r = values_B_size;
-			else
-				r = values_A_size;
-		}
-		else	{
-			r = values_A_size;
-		}
-		for(j = 0; j < r; j++)	{
-			minimun_bytes =  minimum_same_bytes(vanity_rmd_limit_values_A[vanity_rmd_targets][j],vanity_rmd_limit_values_B[vanity_rmd_targets][j],20);
-			if(minimun_bytes < vanity_rmd_minimun_bytes_check_length)	{
-				vanity_rmd_minimun_bytes_check_length = minimun_bytes;
-			}
-		}
-		vanity_address_targets[vanity_rmd_targets] = (char*) calloc(targetsize+1,sizeof(char));
-		checkpointer((void *)vanity_address_targets[vanity_rmd_targets],__FILE__,"calloc","vanity_address_targets" ,__LINE__ -1 );
-		memcpy(vanity_address_targets[vanity_rmd_targets],target,targetsize+1);	// +1 to copy the null character
-		vanity_rmd_limits[vanity_rmd_targets] = r;
-		vanity_rmd_total+=r;
-		vanity_rmd_targets++;
-	}
-	else	{
-		for(j = 0; j < values_A_size;j++)	{
-			free(vanity_rmd_limit_values_A[vanity_rmd_targets][j]);
-		}
-		free(vanity_rmd_limit_values_A[vanity_rmd_targets]);
-		vanity_rmd_limit_values_A[vanity_rmd_targets] = NULL;
-		
-		for(j = 0; j < values_B_size;j++)	{
-			free(vanity_rmd_limit_values_B[vanity_rmd_targets][j]);
-		}
-		free(vanity_rmd_limit_values_B[vanity_rmd_targets]);
-		vanity_rmd_limit_values_B[vanity_rmd_targets] = NULL;
-		r = 0;
-	}
-	return r;
-}
-
-
-/*
-A and B are binary o string data pointers
-length the max lenght to check.
-
-Caller must by sure that the pointer are valid and have at least length bytes readebles witout causing overflow
-*/
-int minimum_same_bytes(unsigned char* A,unsigned char* B, int length) {
-    int minBytes = 0; // Assume initially that all bytes are the same
-	if(A == NULL || B  == NULL)	{	// In case of some NULL pointer
-		return 0;
-	}
-    for (int i = 0; i < length; i++) {
-        if (A[i] != B[i]) {
-            break; // Exit the loop since we found a mismatch
-        }
-        minBytes++; // Update the minimum number of bytes where data is the same
-    }
-
-    return minBytes;
-}
 
 void checkpointer(void *ptr,const char *file,const char *function,const  char *name,int line)	{
 	if(ptr == NULL)	{
@@ -6579,67 +5482,10 @@ bool isValidBase58String(char *str)	{
 	return continuar;
 }
 
-bool processOneVanity()	{
-	int i,k;
-	if(vanity_rmd_targets == 0)	{
-		fprintf(stderr,"[E] There aren't any vanity targets\n");
-		return false;
-	}
-
-	if(!initCuckooFilter(vanity_cuckoo, vanity_rmd_total))
-		return false;
-	
-	for(i = 0; i < vanity_rmd_targets;i++)	{
-		for(k = 0; k < vanity_rmd_limits[i]; k++)	{
-			cuckoo_add(vanity_cuckoo, vanity_rmd_limit_values_A[i][k] ,vanity_rmd_minimun_bytes_check_length);
-		}
-	}
-	return true;
-}
 
 
-bool readFileVanity(char *fileName)	{
-	FILE *fileDescriptor;
-	int i,k,len;
-	char aux[100],*hextemp;
 
-	fileDescriptor = fopen(fileName,"r");
-	if(fileDescriptor == NULL)	{
-		if(vanity_rmd_targets == 0)	{
-			fprintf(stderr,"[E] There aren't any vanity targets\n");
-			return false;
-		}
-	}
-	else	{
-		while(!feof(fileDescriptor))	{
-			hextemp = fgets(aux,100,fileDescriptor);
-			if(hextemp == aux)	{
-				trim(aux," \t\n\r");
-				len = strlen(aux);
-				if(len > 0 && len < 36){
-					if(isValidBase58String(aux))	{
-						addvanity(aux);
-					}
-					else	{
-						fprintf(stderr,"[E] the string \"%s\" is not valid Base58, omiting it\n",aux);
-					}
-				}
-			}
-		}
-		fclose(fileDescriptor);
-	}
-	
-	N = vanity_rmd_total;
-	if(!initCuckooFilter(vanity_cuckoo,N))
-		return false;
-	
-	for(i = 0; i < vanity_rmd_targets ; i++)	{
-		for(k = 0; k < vanity_rmd_limits[i]; k++)	{
-			cuckoo_add(vanity_cuckoo, vanity_rmd_limit_values_A[i][k] ,vanity_rmd_minimun_bytes_check_length);
-		}
-	}
-	return true;
-}
+
 
 bool readFileAddress(char *fileName)	{
 	FILE *fileDescriptor;
@@ -6780,9 +5626,7 @@ bool readFileAddress(char *fileName)	{
 			MAXLENGTHADDRESS = sizeof(struct address_value);
 		}
 	}
-	if(FLAGVANITY)	{
-		processOneVanity();
-	}
+
 	if(!FLAGREADEDFILE1)	{
 		/*
 			if the data_ file doesn't exist we need read it first:
@@ -7072,7 +5916,7 @@ bool initCuckooFilter(struct cuckoo *cuckoo_arg,uint64_t items_cuckoo)	{
 		}
 	}
 	else	{
-		if(cuckoo_init2(cuckoo_arg,FLAGCUCKOOMULTIPLIER*items_cuckoo,0.000001)	== 1){
+		if(cuckoo_init2(cuckoo_arg,1*items_cuckoo,0.000001)	== 1){
 			fprintf(stderr,"[E] error cuckoo_init for %" PRIu64 " elements.\n",items_cuckoo);
 			r = false;
 		}

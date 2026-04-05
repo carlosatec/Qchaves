@@ -821,7 +821,7 @@ void menu() {
     printf("Modo Kangaroo Standalone v2.0\n");
     printf("Uso: ./modo-kangaroo [opcoes]\n");
     printf("Opcoes:\n");
-    printf("  --auto[=perfil]  Auto-detecta hardware e aplica tuning (safe|balanced|max)\n");
+    printf("  -A, --auto[=perfil] Auto-detecta hardware e aplica tuning (safe|balanced|max)\n");
     printf("  -r <START:END>   Intervalo de busca em Hex (Ex: 1:FFFFFFFF)\n");
     printf("  -p <PUBKEY>      Chave Publica alvo em Hex (Comprimida ou Uncomprimida)\n");
     printf("  -t <threads>     Numero de threads (Default: 1)\n");
@@ -1748,8 +1748,9 @@ int main(int argc, char** argv) {
         {"help", no_argument, nullptr, 'h'},
         {nullptr, 0, nullptr, 0}
     };
-        while ((c = getopt_long(argc, argv, "hr:p:t:d:m:b:j:w:", long_options, nullptr)) != -1) {
+        while ((c = getopt_long(argc, argv, "hr:p:t:d:m:b:j:w:A:", long_options, nullptr)) != -1) {
         switch (c) {
+            case 'A':
             case 1000:
                 FLAG_AUTO_PROFILE = true;
                 if (optarg != nullptr && *optarg != '\0') {

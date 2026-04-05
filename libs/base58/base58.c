@@ -108,6 +108,7 @@ bool b58tobin(void *bin, size_t *binszp, const char *b58, size_t b58sz)
 static
 bool my_dblsha256(void *hash, const void *data, size_t datasz)
 {
+	(void)hash; (void)data; (void)datasz;
 	uint8_t buf[0x20];
 	return b58_sha256_impl(buf, data, datasz) && b58_sha256_impl(hash, buf, sizeof(buf));
 }

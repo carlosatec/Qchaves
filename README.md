@@ -56,13 +56,13 @@ Busca chaves privadas comparando endereços gerados com uma lista de endereços-
 **Exemplos:**
 ```bash
 # Busca aleatória em puzzle 21
-./Address/modo-address -f Puzzles/21.txt -b 21 -l compress -R random -t 8
+Modulos/Address/modo-address -f Puzzles/21.txt -b 21 -l compress -R random -t 8
 
 # Busca sequencial
-./Address/modo-address -f Puzzles/21.txt -b 21 -l compress -t 8
+Modulos/Address/modo-address -f Puzzles/21.txt -b 21 -l compress -t 8
 
 # Auto-tuning (recomendado)
-./Address/modo-address -A balanced -f Puzzles/21.txt -b 21
+Modulos/Address/modo-address -A balanced -f Puzzles/21.txt -b 21
 ```
 
 ---
@@ -94,16 +94,16 @@ Baby-Step Giant-Step. Algoritmo rápido para ranges conhecidos, mas requer muita
 **Exemplos:**
 ```bash
 # BSGS normal com 8 threads
-./BSGS/modo-bsgs -f Puzzles/66.txt -b 66 -t 8
+Modulos/BSGS/modo-bsgs -f Puzzles/66.txt -b 66 -t 8
 
 # BSGS modo random (para puzzles)
-./BSGS/modo-bsgs -R random -f Puzzles/66.txt -b 66 -t 8
+Modulos/BSGS/modo-bsgs -R random -f Puzzles/66.txt -b 66 -t 8
 
 # Com mais RAM (k=32)
-./BSGS/modo-bsgs -f Puzzles/66.txt -b 66 -k 32 -t 16
+Modulos/BSGS/modo-bsgs -f Puzzles/66.txt -b 66 -k 32 -t 16
 
 # Auto-tuning
-./BSGS/modo-bsgs -A balanced -f Puzzles/66.txt -b 66
+Modulos/BSGS/modo-bsgs -A balanced -f Puzzles/66.txt -b 66
 ```
 
 **Guia de RAM:**
@@ -138,10 +138,10 @@ Pollard's Kangaroo. Melhor para ranges gigantes onde BSGS seria impossível (puz
 **Exemplos:**
 ```bash
 # Kangaroo normal
-./kangaroo/modo-kangaroo -p 02ABCD... -b 130 -r 0:FFFFFFFFFFFFFFFF -t 12 -d 22 -j 48 -w 40
+Modulos/kangaroo/modo-kangaroo -p 02ABCD... -b 130 -r 0:FFFFFFFFFFFFFFFF -t 12 -d 22 -j 48 -w 40
 
 # Auto-tuning (recomendado)
-./kangaroo/modo-kangaroo -A balanced -p 02ABCD... -b 130 -r 0:FFFFFFFFFFFFFFFF
+Modulos/kangaroo/modo-kangaroo -A balanced -p 02ABCD... -b 130 -r 0:FFFFFFFFFFFFFFFF
 ```
 
 ---
@@ -194,7 +194,7 @@ O auto-tuning detecta seu hardware e ajusta os parâmetros automaticamente.
 **Exemplo com overrides:**
 ```bash
 # Usa perfil max, mas força apenas 8 threads
-./BSGS/modo-bsgs -A max -t 8 -f Puzzles/66.txt -b 66
+Modulos/BSGS/modo-bsgs -A max -t 8 -f Puzzles/66.txt -b 66
 ```
 
 ---
