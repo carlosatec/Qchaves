@@ -1,3 +1,14 @@
+/*
+ * Project      : Qchaves (Integration & Improvements)
+ * Repository   : https://github.com/carlosatec/Qchave
+ * Author       : Carlos (Qchaves Team)
+ * 
+ * Based on     : Keyhunt by AlbertoBSD (Original BSGS/Address Logic)
+ * Contributors : Iceland (Optimized SSE/AVX Point addition & ideas)
+ *              : lmajowka (Cacachave contributions)
+ * License      : MIT License
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -619,7 +630,7 @@ void save_checkpoint_address(int bits) {
         snapshot_address_progress(&cursor, &range_end_snapshot, &random_mode);
         char *cursor_hex = cursor.GetBase16();
         char *range_end_hex = range_end_snapshot.GetBase16();
-        fprintf(f, "ADDR2\n%d\n%d\n%s\n%s\n", bits, random_mode, cursor_hex, range_end_hex);
+        fprintf(f, "ADDR3\n%d\n%d\n%d\n%s\n%s\n", bits, FLAGBSGSMODE, random_mode, cursor_hex, range_end_hex);
         fclose(f);
         free(cursor_hex);
         free(range_end_hex);
@@ -635,15 +646,29 @@ bool load_checkpoint_address(int bits) {
         char cursor_hex[128] = {0};
         char range_end_hex[128] = {0};
         int fbits;
+        int mode_snapshot = 0;
         int random_mode = 0;
         if (fscanf(f, "%15s", magic) == 1) {
-            if (strcmp(magic, "ADDR2") == 0) {
+            if (strcmp(magic, "ADDR3") == 0) {
+                if (fscanf(f, "%d\n%d\n%d\n%127s\n%127s\n", &fbits, &mode_snapshot, &random_mode, cursor_hex, range_end_hex) == 5 && fbits == bits) {
+                    if (should_resume_address_checkpoint(filename)) {
+                        n_range_start.SetBase16(cursor_hex);
+                        n_range_end.SetBase16(range_end_hex);
+                        FLAGBSGSMODE = mode_snapshot;
+                        FLAGRANDOM = random_mode;
+                        printf("[+] Retomando da posição: 0x%s (mode: %s)\n", cursor_hex, bsgs_modes[FLAGBSGSMODE]);
+                        fclose(f);
+                        return true;
+                    }
+                }
+            } else if (strcmp(magic, "ADDR2") == 0) {
                 if (fscanf(f, "%d\n%d\n%127s\n%127s\n", &fbits, &random_mode, cursor_hex, range_end_hex) == 4 && fbits == bits) {
                     if (should_resume_address_checkpoint(filename)) {
                         n_range_start.SetBase16(cursor_hex);
                         n_range_end.SetBase16(range_end_hex);
                         FLAGRANDOM = random_mode;
-                        printf("[+] Retomando da posição: 0x%s\n", cursor_hex);
+                        FLAGBSGSMODE = random_mode ? 3 : 0;
+                        printf("[+] Retomando da posição: 0x%s (modo legado)\n", cursor_hex);
                         fclose(f);
                         return true;
                     }
@@ -652,7 +677,7 @@ bool load_checkpoint_address(int bits) {
                 if (fscanf(f, "%d\n%127s\n", &fbits, cursor_hex) == 2 && fbits == bits) {
                     if (should_resume_address_checkpoint(filename)) {
                         n_range_start.SetBase16(cursor_hex);
-                        printf("[+] Retomando da posição: 0x%s\n", cursor_hex);
+                        printf("[+] Retomando da posição: 0x%s (formato antigo)\n", cursor_hex);
                         fclose(f);
                         return true;
                     }
@@ -736,7 +761,7 @@ int main(int argc, char **argv)	{
 	
 	
 
-	while ((c = getopt(argc, argv, "deh6MqRSB:b:c:C:E:f:I:k:l:m:N:n:p:r:s:t:v:G:8:z:A")) != -1) {
+	while ((c = getopt(argc, argv, "deh6MqSR:b:c:C:E:f:I:k:l:m:N:n:p:r:s:t:v:G:8:z:A")) != -1) {
 		switch(c) {
 			case 'A':
 				FLAG_AUTO_PROFILE = true;
@@ -755,11 +780,11 @@ int main(int argc, char **argv)	{
 				FLAGSKIPCHECKSUM = 1;
 				fprintf(stderr,"[W] Skipping checksums on files\n");
 			break;
-			case 'B':
+			case 'R':
 				index_value = indexOf(optarg,bsgs_modes,5);
 				if(index_value >= 0 && index_value <= 4)	{
 					FLAGBSGSMODE = index_value;
-					//printf("[+] BSGS mode %s\n",optarg);
+					printf("[+] BSGS mode %s\n",optarg);
 				}
 				else	{
 					fprintf(stderr,"[W] Ignoring unknow bsgs mode %s\n",optarg);
@@ -910,11 +935,6 @@ int main(int argc, char **argv)	{
 			case 'q':
 				FLAGQUIET	= 1;
 				printf("[+] Quiet thread output\n");
-			break;
-			case 'R':
-				printf("[+] Random mode\n");
-				FLAGRANDOM = 1;
-				FLAGBSGSMODE =  3;
 			break;
 			case 'r':
 				if(optarg != NULL)	{
@@ -6153,7 +6173,7 @@ void menu() {
 	printf("\nUsage:\n");
 	printf("-h          show this help\n");
 	printf("-A profile  Auto-detects hardware and applies tuning (safe|balanced|max|benchmark)\n");
-	printf("-B Mode     BSGS now have some modes <sequential, backward, both, random, dance>\n");
+	printf("-R Mode     Search modes <sequential, backward, both, random, dance>\n");
 	printf("-b bits     For some puzzles you only need some numbers of bits in the test keys.\n");
 	printf("-c crypto   Search for specific crypto. <btc, eth> valid only w/ -m address\n");
 	printf("-C mini     Set the minikey Base only 22 character minikeys, ex: SRPqx8QiwnW4WNWnTVa2W5\n");
@@ -6169,7 +6189,6 @@ void menu() {
 	printf("            Use -n to set the N for the BSGS process. Bigger N more RAM needed\n");
 	printf("-q          Quiet the thread output\n");
 	printf("-r SR:EN    StarRange:EndRange, the end range can be omitted for search from start range to N-1 ECC value\n");
-	printf("-R          Random, this is the default behavior\n");
 	printf("-s ns       Number of seconds for the stats output, 0 to omit output.\n");
 	printf("-S          S is for SAVING in files BSGS data (Cuckoo filters and bPtable)\n");
 	printf("-6          to skip sha256 Checksum on data files");
@@ -6177,10 +6196,8 @@ void menu() {
 	printf("-v value    Search for vanity Address, only with -m vanity\n");
 	printf("-z value    Cuckoo size multiplier, only address,rmd160,vanity, xpoint, value >= 1\n");
 	printf("\nExample:\n\n");
-	printf("./keyhunt -m rmd160 -f tests/unsolvedpuzzles.rmd -b 66 -l compress -R -q -t 8\n\n");
-	printf("This line runs the program with 8 threads from the range 20000000000000000 to 40000000000000000 without stats output\n\n");
-	printf("Developed by AlbertoBSD\tTips BTC: 1Coffee1jV4gB5gaXfHgSHDz9xx9QSECVW\n");
-	printf("Thanks to Iceland always helping and sharing his ideas.\nTips to Iceland: bc1q39meky2mn5qjq704zz0nnkl0v7kj4uz6r529at\n\n");
+	printf("./modo-address -m address -f addresses.txt -b 66 -R random -q -t 8\n\n");
+	printf("This line runs the program with 8 threads for a 66-bit search using random mode without stats output\n\n");
 	exit(0);
 }
 

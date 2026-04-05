@@ -1,3 +1,14 @@
+/*
+ * Project      : Qchaves (Integration & Improvements)
+ * Repository   : https://github.com/carlosatec/Qchave
+ * Author       : Carlos (Qchaves Team)
+ * 
+ * Based on     : Keyhunt by AlbertoBSD (Original BSGS/Address Logic)
+ * Contributors : Iceland (Optimized SSE/AVX Point addition & ideas)
+ *              : lmajowka (Cacachave contributions)
+ * License      : MIT License
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -816,7 +827,7 @@ int main(int argc, char **argv)	{
 	
 	
 
-	while ((c = getopt(argc, argv, "deh6MqRSB:b:c:C:E:f:I:k:l:m:N:n:p:r:s:t:v:G:8:z:A")) != -1) {
+	while ((c = getopt(argc, argv, "deh6MqSR:b:c:C:E:f:I:k:l:m:N:n:p:r:s:t:v:G:8:z:A")) != -1) {
 		switch(c) {
 			case 'A':
 				FLAG_AUTO_PROFILE = true;
@@ -835,11 +846,11 @@ int main(int argc, char **argv)	{
 				FLAGSKIPCHECKSUM = 1;
 				fprintf(stderr,"[W] Skipping checksums on files\n");
 			break;
-			case 'B':
+			case 'R':
 				index_value = indexOf(optarg,bsgs_modes,5);
 				if(index_value >= 0 && index_value <= 4)	{
 					FLAGBSGSMODE = index_value;
-					//printf("[+] BSGS mode %s\n",optarg);
+					printf("[+] BSGS mode %s\n",optarg);
 				}
 				else	{
 					fprintf(stderr,"[W] Ignoring unknow bsgs mode %s\n",optarg);
@@ -992,11 +1003,6 @@ int main(int argc, char **argv)	{
 			case 'q':
 				FLAGQUIET	= 1;
 				printf("[+] Quiet thread output\n");
-			break;
-			case 'R':
-				printf("[+] Random mode\n");
-				FLAGRANDOM = 1;
-				FLAGBSGSMODE =  3;
 			break;
 			case 'r':
 				if(optarg != NULL)	{
@@ -6136,7 +6142,7 @@ void menu() {
 	printf("\nUsage:\n");
 	printf("-h          show this help\n");
 	printf("-A profile  Auto-detects hardware and applies tuning (safe|balanced|max|benchmark)\n");
-	printf("-B Mode     BSGS now have some modes <sequential, backward, both, random, dance>\n");
+	printf("-R Mode     BSGS modes <sequential, backward, both, random, dance>\n");
 	printf("-b bits     For some puzzles you only need some numbers of bits in the test keys.\n");
 	printf("-c crypto   Search for specific crypto. <btc, eth> valid only w/ -m address\n");
 	printf("-C mini     Set the minikey Base only 22 character minikeys, ex: SRPqx8QiwnW4WNWnTVa2W5\n");
@@ -6152,7 +6158,6 @@ void menu() {
 	printf("            Use -n to set the N for the BSGS process. Bigger N more RAM needed\n");
 	printf("-q          Quiet the thread output\n");
 	printf("-r SR:EN    StarRange:EndRange, the end range can be omitted for search from start range to N-1 ECC value\n");
-	printf("-R          Random, this is the default behavior\n");
 	printf("-s ns       Number of seconds for the stats output, 0 to omit output.\n");
 	printf("-S          S is for SAVING in files BSGS data (Cuckoo filters and bPtable)\n");
 	printf("-6          to skip sha256 Checksum on data files");
@@ -6160,10 +6165,8 @@ void menu() {
 	printf("-v value    Search for vanity Address, only with -m vanity\n");
 	printf("-z value    Cuckoo size multiplier, only address,rmd160,vanity, xpoint, value >= 1\n");
 	printf("\nExample:\n\n");
-	printf("./keyhunt -m rmd160 -f tests/unsolvedpuzzles.rmd -b 66 -l compress -R -q -t 8\n\n");
-	printf("This line runs the program with 8 threads from the range 20000000000000000 to 40000000000000000 without stats output\n\n");
-	printf("Developed by AlbertoBSD\tTips BTC: 1Coffee1jV4gB5gaXfHgSHDz9xx9QSECVW\n");
-	printf("Thanks to Iceland always helping and sharing his ideas.\nTips to Iceland: bc1q39meky2mn5qjq704zz0nnkl0v7kj4uz6r529at\n\n");
+	printf("./modo-bsgs -m bsgs -f addresses.txt -b 66 -R random -q -t 8\n\n");
+	printf("This line runs the program with 8 threads for a 66-bit search using random mode without stats output\n\n");
 	exit(0);
 }
 

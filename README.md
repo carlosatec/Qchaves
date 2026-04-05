@@ -1,4 +1,4 @@
-# Qchaves Core Engines
+# Qchaves
 
 Suite de busca de chaves privadas Bitcoin na curva secp256k1.
 
@@ -42,7 +42,7 @@ Busca chaves privadas comparando endereços gerados com uma lista de endereços-
 - `-f` - Arquivo com os endereços-alvo (formato: 1... ou pubkey hex)
 - `-b` - Bit range (ex: 66 = busca entre 2^65 e 2^66)
 - `-t` - Número de threads
-- `-R` - Modo aleatório (sem = sequencial)
+- `-R` - Modo de busca (sequential, backward, both, random, dance)
 - `-l` - Tipo de busca: compress, uncompress, both
 - `-A` - Auto-tuning (safe, balanced, max)
 
@@ -70,11 +70,11 @@ Baby-Step Giant-Step. Algoritmo rápido para ranges conhecidos, mas requer muita
 - Conhece o intervalo exato da chave
 
 **Modos de busca:**
-- `-B sequential` - Do início ao fim (padrão)
-- `-B backward` - Do fim para o início
-- `-B both` - Metade das threads para cada lado (mais rápido)
-- `-B random` - Posições aleatórias (puzzles)
-- `-B dance` - Mix aleatório de todos modos
+- `-R sequential` - Do início ao fim (padrão)
+- `-R backward` - Do fim para o início
+- `-R both` - Metade das threads para cada lado (mais rápido)
+- `-R random` - Posições aleatórias (puzzles)
+- `-R dance` - Mix aleatório de todos modos
 
 **Parâmetros principais:**
 - `-f` - Arquivo com as public keys-alvo
@@ -90,7 +90,7 @@ Baby-Step Giant-Step. Algoritmo rápido para ranges conhecidos, mas requer muita
 ./BSGS/modo-bsgs -f Puzzles/66.txt -b 66 -t 8
 
 # BSGS modo random (para puzzles)
-./BSGS/modo-bsgs -B random -f Puzzles/66.txt -b 66 -t 8
+./BSGS/modo-bsgs -R random -f Puzzles/66.txt -b 66 -t 8
 
 # Com mais RAM (k=32)
 ./BSGS/modo-bsgs -f Puzzles/66.txt -b 66 -k 32 -t 16
