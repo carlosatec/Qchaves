@@ -46,16 +46,23 @@ Busca chaves privadas comparando endereços gerados com uma lista de endereços-
 - `-l` - Tipo de busca: compress, uncompress, both
 - `-A` - Auto-tuning (safe, balanced, max)
 
+**Modos de busca:**
+- `-R sequential` - Do início ao fim (padrão)
+- `-R backward` - Do fim para o início
+- `-R both` - Metade das threads para cada lado (mais rápido)
+- `-R random` - Posições aleatórias (puzzles)
+- `-R dance` - Mix aleatório de todos modos
+
 **Exemplos:**
 ```bash
 # Busca aleatória em puzzle 21
-./Address/modo-address -f Puzzles/21.txt -b 21 -l compress -R -t 8
+./Address/modo-address -f Puzzles/21.txt -b 21 -l compress -R random -t 8
 
 # Busca sequencial
 ./Address/modo-address -f Puzzles/21.txt -b 21 -l compress -t 8
 
 # Auto-tuning (recomendado)
-./Address/modo-address -A balanced -f Puzzles/21.txt -b 21 -R
+./Address/modo-address -A balanced -f Puzzles/21.txt -b 21
 ```
 
 ---

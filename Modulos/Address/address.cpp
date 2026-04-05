@@ -784,6 +784,9 @@ int main(int argc, char **argv)	{
 				index_value = indexOf(optarg,bsgs_modes,5);
 				if(index_value >= 0 && index_value <= 4)	{
 					FLAGBSGSMODE = index_value;
+					if (index_value == 3) {
+						FLAGRANDOM = 1;
+					}
 					printf("[+] BSGS mode %s\n",optarg);
 				}
 				else	{
