@@ -849,6 +849,10 @@ int main(int argc, char **argv)	{
 				fprintf(stderr,"[W] Skipping checksums on files\n");
 			break;
 			case 'R':
+				if(optarg == NULL) {
+					fprintf(stderr,"[E] -R requires an argument\n");
+					exit(EXIT_FAILURE);
+				}
 				index_value = indexOf(optarg,bsgs_modes,5);
 				if(index_value >= 0 && index_value <= 4)	{
 					FLAGBSGSMODE = index_value;
