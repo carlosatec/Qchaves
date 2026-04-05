@@ -3133,6 +3133,16 @@ void *thread_process(void *vargp)	{
 	return NULL;
 }
 
+static inline int compare_address_value(const struct address_value *a, const struct address_value *b) {
+    uint64_t ua, ub;
+    memcpy(&ua, a->value, sizeof(uint64_t));
+    memcpy(&ub, b->value, sizeof(uint64_t));
+    if (ua != ub) {
+        return (ua < ub) ? -1 : 1;
+    }
+    return memcmp(a->value + 8, b->value + 8, 12);
+}
+
 void _swap(struct address_value *a,struct address_value *b)	{
 	struct address_value t;
 	t  = *a;
@@ -3228,7 +3238,7 @@ void _insertionsort(struct address_value *arr, int64_t n) {
 	for(i = 1; i < n ; i++ ) {
 		key = arr[i];
 		j= i-1;
-		while(j >= 0 && memcmp(arr[j].value,key.value,20) > 0) {
+		while(j >= 0 && compare_address_value(&arr[j], &key) > 0) {
 			arr[j+1] = arr[j];
 			j--;
 		}
@@ -3244,10 +3254,10 @@ int64_t _partition(struct address_value *arr, int64_t n)	{
 	left = 0;
 	right = n-1;
 	do {
-		while(left	< right && memcmp(arr[left].value,pivot.value,20) <= 0 )	{
+		while(left	< right && compare_address_value(&arr[left], &pivot) <= 0 )	{
 			left++;
 		}
-		while(right >= left && memcmp(arr[right].value,pivot.value,20) > 0)	{
+		while(right >= left && compare_address_value(&arr[right], &pivot) > 0)	{
 			right--;
 		}
 		if(left < right)	{
@@ -3272,9 +3282,9 @@ void _heapify(struct address_value *arr, int64_t n, int64_t i) {
 	int64_t largest = i;
 	int64_t l = 2 * i + 1;
 	int64_t r = 2 * i + 2;
-	if (l < n && memcmp(arr[l].value,arr[largest].value,20) > 0)
+	if (l < n && compare_address_value(&arr[l], &arr[largest]) > 0)
 		largest = l;
-	if (r < n && memcmp(arr[r].value,arr[largest].value,20) > 0)
+	if (r < n && compare_address_value(&arr[r], &arr[largest]) > 0)
 		largest = r;
 	if (largest != i) {
 		_swap(&arr[i],&arr[largest]);

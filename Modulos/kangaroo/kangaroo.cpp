@@ -1044,6 +1044,7 @@ void refresh_x_cache_locked(ThreadContext* tc) {
 void fleet_gej_initial_jump(secp256k1_gej* res, const secp256k1_gej* start, int count) {
     *res = *start;
     for (int i = 0; i < count; ++i) {
+        __builtin_prefetch(&jump_set[0].point, 0, 1);
         secp256k1_gej_add_ge_var(res, res, &jump_set[0].point, NULL);
     }
 }
