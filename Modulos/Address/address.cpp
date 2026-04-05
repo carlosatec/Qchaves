@@ -568,7 +568,6 @@ bool should_resume_address_checkpoint(const char *filename) {
 
 void signal_handler(int sig) {
     if (sig == SIGINT) {
-        printf("\n[!] Interrupção detectada. Salvando checkpoint...\n");
         SHOULD_SAVE = true;
     }
 }
@@ -731,7 +730,6 @@ int main(int argc, char **argv)	{
 		*/
 		fprintf(stderr,"[E] Error getrandom() ?\n");
 		exit(EXIT_FAILURE);
-		rseed(clock() + time(NULL) + rand()*rand());
 	}
 #endif
 	
@@ -6154,6 +6152,7 @@ void sha256sse_23(uint8_t *src0, uint8_t *src1, uint8_t *src2, uint8_t *src3, ui
 void menu() {
 	printf("\nUsage:\n");
 	printf("-h          show this help\n");
+	printf("-A profile  Auto-detects hardware and applies tuning (safe|balanced|max|benchmark)\n");
 	printf("-B Mode     BSGS now have some modes <sequential, backward, both, random, dance>\n");
 	printf("-b bits     For some puzzles you only need some numbers of bits in the test keys.\n");
 	printf("-c crypto   Search for specific crypto. <btc, eth> valid only w/ -m address\n");
@@ -6182,7 +6181,7 @@ void menu() {
 	printf("This line runs the program with 8 threads from the range 20000000000000000 to 40000000000000000 without stats output\n\n");
 	printf("Developed by AlbertoBSD\tTips BTC: 1Coffee1jV4gB5gaXfHgSHDz9xx9QSECVW\n");
 	printf("Thanks to Iceland always helping and sharing his ideas.\nTips to Iceland: bc1q39meky2mn5qjq704zz0nnkl0v7kj4uz6r529at\n\n");
-	exit(EXIT_FAILURE);
+	exit(0);
 }
 
 bool vanityrmdmatch(unsigned char *rmdhash)	{

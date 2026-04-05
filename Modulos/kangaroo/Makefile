@@ -1,5 +1,13 @@
 CXX = g++
-CXXFLAGS = -O3 -march=westmere -funroll-loops -Wall -Wextra -fpermissive
+
+ifeq ($(PORTABLE),1)
+    ARCH_FLAGS = -mtune=generic
+else
+    ARCH_FLAGS = -march=native -mtune=native -mssse3
+endif
+
+# Removido -fpermissive conforme plano de robustez
+CXXFLAGS = -O3 $(ARCH_FLAGS) -funroll-loops -Wall -Wextra
 INCLUDES = -I../../libs/libsecp256k1/include -I../../libs/libsecp256k1/src -I../../libs
 LIBS = -lgmp -lpthread
 

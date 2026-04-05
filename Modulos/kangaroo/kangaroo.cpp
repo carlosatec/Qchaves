@@ -598,7 +598,6 @@ bool u192_from_bytes32(const unsigned char in[32], UInt192& out) {
 
 void signal_handler(int sig) {
     if (sig == SIGINT) {
-        printf("\n[!] Interrupcao detectada. Finalizando e salvando...\n");
         SHOULD_SAVE = true;
     }
 }
@@ -614,30 +613,31 @@ void write_mpz(FILE* f, mpz_t m) {
     free(data);
 }
 
-void read_mpz(FILE* f, mpz_t m) {
+bool read_mpz(FILE* f, mpz_t m) {
     uint32_t len = 0;
     if (fread(&len, 4, 1, f) != 1) {
         mpz_set_ui(m, 0);
-        return;
+        return false;
     }
     if (len == 0) {
         mpz_set_ui(m, 0);
-        return;
+        return true;
     }
 
     unsigned char* data = (unsigned char*)malloc(len);
     if (data == nullptr) {
         mpz_set_ui(m, 0);
         fseek(f, len, SEEK_CUR);
-        return;
+        return false;
     }
     if (fread(data, 1, len, f) != len) {
         free(data);
         mpz_set_ui(m, 0);
-        return;
+        return false;
     }
     mpz_import(m, len, 1, 1, 1, 0, data);
     free(data);
+    return true;
 }
 
 void export_mpz_32(mpz_t value, unsigned char out[32]) {
@@ -1157,11 +1157,24 @@ bool save_checkpoint_v2(FILE* f) {
     }
     return true;
 }
+
+bool wipe_threads_on_fail() {
+    for (auto* tc : threads_data) {
+        delete tc;
+    }
+    threads_data.clear();
+    for (size_t i = 0; i < TRAP_SHARDS; ++i) {
+        trap_shards[i].table.clear();
+    }
+    TOTAL_TRAPS.store(0);
+    return false;
+}
+
 bool load_checkpoint_v1(FILE* f) {
     uint64_t hops = 0;
     uint32_t num_thr = 0;
-    fread(&hops, 8, 1, f);
-    fread(&num_thr, 4, 1, f);
+    if(fread(&hops, 8, 1, f) != 1) return wipe_threads_on_fail();
+    if(fread(&num_thr, 4, 1, f) != 1) return wipe_threads_on_fail();
     TOTAL_HOPS.store(hops);
 
     for (uint32_t t = 0; t < num_thr; ++t) {
@@ -1170,15 +1183,15 @@ bool load_checkpoint_v1(FILE* f) {
         tc->hops = 0;
         tc->x_cache_dirty = true;
         for (int i = 0; i < FLEET_SIZE; ++i) {
-            fread(&tc->fleet[i].is_wild, 1, 1, f);
-            fread(&tc->fleet[i].point, sizeof(secp256k1_gej), 1, f);
+            if(fread(&tc->fleet[i].is_wild, 1, 1, f) != 1) { delete tc; return wipe_threads_on_fail(); }
+            if(fread(&tc->fleet[i].point, sizeof(secp256k1_gej), 1, f) != 1) { delete tc; return wipe_threads_on_fail(); }
             mpz_t distance;
             mpz_init(distance);
-            read_mpz(f, distance);
+            if(!read_mpz(f, distance)) { mpz_clear(distance); delete tc; return wipe_threads_on_fail(); }
             if (!u192_from_mpz(distance, tc->fleet_dists[i])) {
                 mpz_clear(distance);
                 delete tc;
-                return false;
+                return wipe_threads_on_fail();
             }
             mpz_clear(distance);
         }
@@ -1187,19 +1200,19 @@ bool load_checkpoint_v1(FILE* f) {
     }
 
     uint64_t num_traps = 0;
-    fread(&num_traps, 8, 1, f);
+    if(fread(&num_traps, 8, 1, f) != 1) return wipe_threads_on_fail();
     for (uint64_t i = 0; i < num_traps; ++i) {
         TrapEntry entry;
-        fread(&entry.is_wild, 1, 1, f);
-        fread(entry.x.bytes, 1, 32, f);
+        if(fread(&entry.is_wild, 1, 1, f) != 1) return wipe_threads_on_fail();
+        if(fread(entry.x.bytes, 1, 32, f) != 1) return wipe_threads_on_fail();
         mpz_t distance;
         UInt192 dist_u192;
         unsigned char dist_bytes[32];
         mpz_init(distance);
-        read_mpz(f, distance);
+        if(!read_mpz(f, distance)) { mpz_clear(distance); return wipe_threads_on_fail(); }
         if (!u192_from_mpz(distance, dist_u192)) {
             mpz_clear(distance);
-            return false;
+            return wipe_threads_on_fail();
         }
         u192_to_bytes32(dist_u192, dist_bytes);
         memcpy(entry.distance_bytes.data(), dist_bytes, sizeof(dist_bytes));
@@ -1214,10 +1227,10 @@ bool load_checkpoint_v3(FILE* f) {
     uint32_t num_thr = 0;
     uint32_t active_jumps = JUMP_COUNT;
     uint32_t active_wild = HALF_FLEET;
-    fread(&hops, 8, 1, f);
-    fread(&num_thr, 4, 1, f);
-    fread(&active_jumps, 4, 1, f);
-    fread(&active_wild, 4, 1, f);
+    if(fread(&hops, 8, 1, f) != 1) return wipe_threads_on_fail();
+    if(fread(&num_thr, 4, 1, f) != 1) return wipe_threads_on_fail();
+    if(fread(&active_jumps, 4, 1, f) != 1) return wipe_threads_on_fail();
+    if(fread(&active_wild, 4, 1, f) != 1) return wipe_threads_on_fail();
     TOTAL_HOPS.store(hops);
     ACTIVE_JUMP_COUNT = std::max(1, std::min((int)active_jumps, JUMP_COUNT));
     ACTIVE_WILD_COUNT = std::max(0, std::min((int)active_wild, FLEET_SIZE));
@@ -1228,29 +1241,23 @@ bool load_checkpoint_v3(FILE* f) {
         tc->hops = 0;
         tc->x_cache_dirty = true;
         for (int i = 0; i < FLEET_SIZE; ++i) {
-            fread(&tc->fleet[i].is_wild, 1, 1, f);
-            if (!read_gej_compressed(f, &tc->fleet[i].point)) {
-                delete tc;
-                return false;
-            }
+            if(fread(&tc->fleet[i].is_wild, 1, 1, f) != 1) { delete tc; return wipe_threads_on_fail(); }
+            if (!read_gej_compressed(f, &tc->fleet[i].point)) { delete tc; return wipe_threads_on_fail(); }
             unsigned char dist_bytes[32];
-            fread(dist_bytes, 1, sizeof(dist_bytes), f);
-            if (!u192_from_bytes32(dist_bytes, tc->fleet_dists[i])) {
-                delete tc;
-                return false;
-            }
-            fread(tc->x_cache[i], 1, 32, f);
+            if(fread(dist_bytes, 1, sizeof(dist_bytes), f) != 1) { delete tc; return wipe_threads_on_fail(); }
+            if (!u192_from_bytes32(dist_bytes, tc->fleet_dists[i])) { delete tc; return wipe_threads_on_fail(); }
+            if(fread(tc->x_cache[i], 1, 32, f) != 1) { delete tc; return wipe_threads_on_fail(); }
         }
         threads_data.push_back(tc);
     }
 
     uint64_t num_traps = 0;
-    fread(&num_traps, 8, 1, f);
+    if(fread(&num_traps, 8, 1, f) != 1) return wipe_threads_on_fail();
     for (uint64_t i = 0; i < num_traps; ++i) {
         TrapEntry entry;
-        fread(&entry.is_wild, 1, 1, f);
-        fread(entry.x.bytes, 1, 32, f);
-        fread(entry.distance_bytes.data(), 1, entry.distance_bytes.size(), f);
+        if(fread(&entry.is_wild, 1, 1, f) != 1) return wipe_threads_on_fail();
+        if(fread(entry.x.bytes, 1, 32, f) != 1) return wipe_threads_on_fail();
+        if(fread(entry.distance_bytes.data(), 1, entry.distance_bytes.size(), f) != 1) return wipe_threads_on_fail();
         traps_insert(entry);
     }
     return true;
@@ -1259,8 +1266,8 @@ bool load_checkpoint_v3(FILE* f) {
 bool load_checkpoint_v2(FILE* f) {
     uint64_t hops = 0;
     uint32_t num_thr = 0;
-    fread(&hops, 8, 1, f);
-    fread(&num_thr, 4, 1, f);
+    if(fread(&hops, 8, 1, f) != 1) return wipe_threads_on_fail();
+    if(fread(&num_thr, 4, 1, f) != 1) return wipe_threads_on_fail();
     TOTAL_HOPS.store(hops);
     ACTIVE_JUMP_COUNT = JUMP_COUNT;
     ACTIVE_WILD_COUNT = HALF_FLEET;
@@ -1271,29 +1278,23 @@ bool load_checkpoint_v2(FILE* f) {
         tc->hops = 0;
         tc->x_cache_dirty = true;
         for (int i = 0; i < FLEET_SIZE; ++i) {
-            fread(&tc->fleet[i].is_wild, 1, 1, f);
-            if (!read_gej_compressed(f, &tc->fleet[i].point)) {
-                delete tc;
-                return false;
-            }
+            if(fread(&tc->fleet[i].is_wild, 1, 1, f) != 1) { delete tc; return wipe_threads_on_fail(); }
+            if (!read_gej_compressed(f, &tc->fleet[i].point)) { delete tc; return wipe_threads_on_fail(); }
             unsigned char dist_bytes[32];
-            fread(dist_bytes, 1, sizeof(dist_bytes), f);
-            if (!u192_from_bytes32(dist_bytes, tc->fleet_dists[i])) {
-                delete tc;
-                return false;
-            }
-            fread(tc->x_cache[i], 1, 32, f);
+            if(fread(dist_bytes, 1, sizeof(dist_bytes), f) != 1) { delete tc; return wipe_threads_on_fail(); }
+            if (!u192_from_bytes32(dist_bytes, tc->fleet_dists[i])) { delete tc; return wipe_threads_on_fail(); }
+            if(fread(tc->x_cache[i], 1, 32, f) != 1) { delete tc; return wipe_threads_on_fail(); }
         }
         threads_data.push_back(tc);
     }
 
     uint64_t num_traps = 0;
-    fread(&num_traps, 8, 1, f);
+    if(fread(&num_traps, 8, 1, f) != 1) return wipe_threads_on_fail();
     for (uint64_t i = 0; i < num_traps; ++i) {
         TrapEntry entry;
-        fread(&entry.is_wild, 1, 1, f);
-        fread(entry.x.bytes, 1, 32, f);
-        fread(entry.distance_bytes.data(), 1, entry.distance_bytes.size(), f);
+        if(fread(&entry.is_wild, 1, 1, f) != 1) return wipe_threads_on_fail();
+        if(fread(entry.x.bytes, 1, 32, f) != 1) return wipe_threads_on_fail();
+        if(fread(entry.distance_bytes.data(), 1, entry.distance_bytes.size(), f) != 1) return wipe_threads_on_fail();
         traps_insert(entry);
     }
     return true;

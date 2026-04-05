@@ -51,7 +51,7 @@ Busca chaves privadas comparando endereços gerados com uma lista de endereços-
 ./Address/modo-address -f Puzzles/21.txt -b 21 -l compress -t 8
 
 # Auto-tuning (recomendado)
-./Address/modo-address --auto=balanced -f Puzzles/21.txt -b 21 -R
+./Address/modo-address -A balanced -f Puzzles/21.txt -b 21 -R
 ```
 
 ---
@@ -92,7 +92,7 @@ Baby-Step Giant-Step. Algoritmo rápido para ranges conhecidos, mas requer muita
 ./BSGS/modo-bsgs -f Puzzles/66.txt -b 66 -k 32 -t 16
 
 # Auto-tuning
-./BSGS/modo-bsgs --auto=balanced -f Puzzles/66.txt -b 66
+./BSGS/modo-bsgs -A balanced -f Puzzles/66.txt -b 66
 ```
 
 **Guia de RAM:**
@@ -161,7 +161,7 @@ Todos os módulos salvam checkpoints automaticamente:
 | `-s` | Intervalo de stats em segundos |
 | `-d` | Ativar modo debug |
 | `-q` | Modo silencioso |
-| `--auto` | Auto-tuning (safe/balanced/max) |
+| `-A` | Auto-tuning (safe/balanced/max) |
 
 ---
 
@@ -183,7 +183,7 @@ O auto-tuning detecta seu hardware e ajusta os parâmetros automaticamente.
 **Exemplo com overrides:**
 ```bash
 # Usa perfil max, mas força apenas 8 threads
-./BSGS/modo-bsgs --auto=max -t 8 -f Puzzles/66.txt -b 66
+./BSGS/modo-bsgs -A max -t 8 -f Puzzles/66.txt -b 66
 ```
 
 ---
