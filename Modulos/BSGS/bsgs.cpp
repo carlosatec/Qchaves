@@ -459,6 +459,7 @@ uint64_t bsgs_aux;
 uint32_t bsgs_point_number;
 
 const char *str_limits_prefixs[7] = {"Mkeys/s","Gkeys/s","Tkeys/s","Pkeys/s","Ekeys/s","Zkeys/s","Ykeys/s"};
+const char *str_limits_prefixs_total[11] = {"","K","M","B","T","Q","Qi","Sx","Sp","Oc","N"};
 const char *str_limits[7] = {"1000000","1000000000","1000000000000","1000000000000000","1000000000000000000","1000000000000000000000","1000000000000000000000000"};
 Int int_limits[7];
 
@@ -2524,14 +2525,29 @@ int main(int argc, char **argv)	{
 					bar[pos++] = ']';
 					bar[pos] = '\0';
 					
-					sprintf(buffer, "\r%s %3d%% | Keys: %s | Rate: %s/s | ETA: %ss ", 
-						bar, pct, str_total, str_pretotal, str_eta);
+					// Formatar total de chaves com prefixo (M, G, T, etc)
+					Int div_total;
+					int total_index = 0;
+					for (int i = 0; i < 11; i++) {
+						if (total.IsLower(&int_limits[i])) {
+							total_index = (i > 0) ? i - 1 : 0;
+							break;
+						}
+						if (i == 10) total_index = 10;
+					}
+					div_total.Set(&total);
+					div_total.Div(&int_limits[total_index]);
+					char* str_total_fmt = div_total.GetBase10();
+					
+					sprintf(buffer, "\r%s %3d%% | Keys: %s %s | Rate: %s/s | ETA: %ss ", 
+						bar, pct, str_total_fmt, str_limits_prefixs_total[total_index], str_pretotal, str_eta);
 					
 					printf("%s", buffer);
 					fflush(stdout);
 					
 					free(str_percent);
 					free(str_eta);
+					free(str_total_fmt);
 				}
 				else if (FLAGRANDOM) {
 					// Modo random: mostrar tempo decorrido
@@ -2540,10 +2556,25 @@ int main(int argc, char **argv)	{
 					int mins = (total_secs % 3600) / 60;
 					int secs = total_secs % 60;
 					
-					sprintf(buffer, "\r[Random] Keys: %s | Rate: %s/s | Time: %02d:%02d:%02d ", 
-						str_total, str_pretotal, hrs, mins, secs);
+					// Formatar total de chaves com prefixo (M, G, T, etc)
+					Int div_total;
+					int total_index = 0;
+					for (int i = 0; i < 11; i++) {
+						if (total.IsLower(&int_limits[i])) {
+							total_index = (i > 0) ? i - 1 : 0;
+							break;
+						}
+						if (i == 10) total_index = 10;
+					}
+					div_total.Set(&total);
+					div_total.Div(&int_limits[total_index]);
+					char* str_total_fmt = div_total.GetBase10();
+					
+					sprintf(buffer, "\r[Random] Keys: %s %s | Rate: %s/s | Time: %02d:%02d:%02d ", 
+						str_total_fmt, str_limits_prefixs_total[total_index], str_pretotal, hrs, mins, secs);
 					printf("%s", buffer);
 					fflush(stdout);
+					free(str_total_fmt);
 				}
 				else {
 					printf("%s",buffer);
