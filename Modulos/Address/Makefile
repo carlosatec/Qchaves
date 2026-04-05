@@ -12,6 +12,7 @@ endif
 
 CXXFLAGS = $(COMMON_FLAGS) $(ARCH_FLAGS)
 CFLAGS = $(COMMON_FLAGS) $(ARCH_FLAGS)
+CFLAGS := $(subst -Wno-deprecated-copy,,$(CFLAGS))
 
 TARGET = modo-address
 
