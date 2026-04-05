@@ -1037,6 +1037,10 @@ int main(int argc, char **argv)	{
 		exit(EXIT_FAILURE);
 	}
 	if(FLAGSTRIDE)	{
+		if(str_stride == NULL) {
+			fprintf(stderr,"[E] Stride parameter is NULL\n");
+			exit(EXIT_FAILURE);
+		}
 		if(str_stride[0] == '0' && str_stride[1] == 'x')	{
 			stride.SetBase16(str_stride+2);
 		}

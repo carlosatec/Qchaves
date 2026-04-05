@@ -133,7 +133,7 @@ int hexs2bin(char *hex, unsigned char *out)	{
 		return 0;
 	len /= 2;
 
-	memset(out, 'A', len);
+	memset(out, 0, len);
 	for (i=0; i<len; i++) {
 		if (!hexchr2bin(hex[i*2], &b1) || !hexchr2bin(hex[i*2+1], &b2)) {
 			return 0;

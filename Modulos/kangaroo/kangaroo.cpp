@@ -686,8 +686,10 @@ bool gej_to_pubkey33(const secp256k1_gej* point, unsigned char out33[33]) {
     secp256k1_ge_set_gej(&affine, &tmp);
     secp256k1_fe_normalize(&affine.x);
     secp256k1_fe_normalize(&affine.y);
-    secp256k1_eckey_pubkey_serialize33(&affine, out33);
-    return true;
+    secp256k1_pubkey pubkey;
+    secp256k1_pubkey_save(&pubkey, &affine);
+    size_t out_len = 33;
+    return secp256k1_ec_pubkey_serialize(ctx_global, out33, &out_len, &pubkey, SECP256K1_EC_COMPRESSED) == 1;
 }
 
 bool pubkey33_to_gej(const unsigned char in33[33], secp256k1_gej* out) {

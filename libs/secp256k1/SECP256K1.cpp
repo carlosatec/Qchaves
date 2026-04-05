@@ -128,7 +128,7 @@ bool Secp256K1::ParsePublicKeyHex(char *str,Point &ret,bool &isCompressed) {
     case 0x04:
       if (len != 130) {
         printf("ParsePublicKeyHex: Error invalid public key specified (130 character length)\n");
-        exit(-1);
+        return false;
       }
       for (int i = 0; i < 32; i++)
         ret.x.SetByte(31 - i, GetByte(str, i + 1));
