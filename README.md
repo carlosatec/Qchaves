@@ -216,6 +216,9 @@ As chaves são salvas em `FOUND_KEYS.txt`.
 
 ## Créditos
 
-Baseado em:
-- Cacachave (github.com/lmajowka/cacachave)
-- Keyhunt (github.com/albertobsd/keyhunt)
+Este projeto é uma derivação e integração de ferramentas de alto desempenho da comunidade de criptografia:
+
+- **[Keyhunt](https://github.com/albertobsd/keyhunt)**: Originalmente desenvolvido por **AlbertoBSD**. O motor principal de busca e os algoritmos de Baby-step Giant-step são baseados em seu trabalho excepcional.
+- **[Cacachave](https://github.com/lmajowka/cacachave)**: Versão adaptada por **lmajowka**, que serviu como base para a interface e localização inicial deste projeto.
+
+Agradecimentos especiais à comunidade de criptografia por compartilhar ferramentas de código aberto de alta performance.
