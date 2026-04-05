@@ -1,3 +1,11 @@
+/*
+ * Project      : Qchaves (Integration & Improvements)
+ * Repository   : https://github.com/carlosatec/Qchave
+ * Author       : Carlos (Qchaves Team)
+ *
+ * License      : MIT License 
+ */
+
 #include <iostream>
 #include <vector>
 #include <string>
