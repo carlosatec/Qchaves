@@ -2,6 +2,10 @@
 
 Suite de busca de chaves privadas Bitcoin na curva secp256k1.
 
+> [!WARNING]
+> **AVISO DE RESPONSABILIDADE E USO ÉTICO**
+> Este software foi desenvolvido exclusivamente para fins educacionais e de pesquisa, especificamente para a resolução de desafios criptográficos (Puzzles BTC). O uso desta ferramenta para qualquer atividade ilícita ou sem autorização é estritamente proibido. Os desenvolvedores e contribuidores não se responsabilizam por qualquer uso indevido, perda de dados ou danos decorrentes da utilização do Qchaves.
+
 ## Compilação
 
 ### Pré-requisitos
@@ -40,7 +44,7 @@ Busca chaves privadas comparando endereços gerados com uma lista de endereços-
 - `-t` - Número de threads
 - `-R` - Modo aleatório (sem = sequencial)
 - `-l` - Tipo de busca: compress, uncompress, both
-- `--auto` - Auto-tuning (safe, balanced, max)
+- `-A` - Auto-tuning (safe, balanced, max)
 
 **Exemplos:**
 ```bash
@@ -78,7 +82,7 @@ Baby-Step Giant-Step. Algoritmo rápido para ranges conhecidos, mas requer muita
 - `-t` - Número de threads
 - `-k` - Fator de memória (quanto maior = mais rápido, mais RAM)
 - `-n` - Tamanho da tabela BSGS
-- `--auto` - Auto-tuning
+- `-A` - Auto-tuning (safe, balanced, max)
 
 **Exemplos:**
 ```bash
@@ -122,7 +126,7 @@ Pollard's Kangaroo. Melhor para ranges gigantes onde BSGS seria impossível (puz
 - `-m` - Limite de RAM em GB para tabela de traps
 - `-j` - Número de saltos ativos
 - `-w` - Número de kangaroos wild na frota
-- `--auto` - Auto-tuning
+- `-A` Auto-tuning (safe, balanced, max)
 
 **Exemplos:**
 ```bash
@@ -130,7 +134,7 @@ Pollard's Kangaroo. Melhor para ranges gigantes onde BSGS seria impossível (puz
 ./kangaroo/modo-kangaroo -p 02ABCD... -b 130 -r 0:FFFFFFFFFFFFFFFF -t 12 -d 22 -j 48 -w 40
 
 # Auto-tuning (recomendado)
-./kangaroo/modo-kangaroo --auto=balanced -p 02ABCD... -b 130 -r 0:FFFFFFFFFFFFFFFF
+./kangaroo/modo-kangaroo -A balanced -p 02ABCD... -b 130 -r 0:FFFFFFFFFFFFFFFF
 ```
 
 ---
