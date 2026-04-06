@@ -36,13 +36,13 @@ Busca chaves privadas comparando endereços gerados com uma lista de endereços-
 **Quando usar:**
 - Você tem uma lista de endereços Bitcoin para buscar
 - Range pequeno a médio (puzzles até ~80)
-- Busca sequencial ou aleatória
+- Busca sequencial, de trás para frente, ambos ou aleatória
 
 **Parâmetros principais:**
 - `-f` - Arquivo com os endereços-alvo (formato: 1... ou pubkey hex)
 - `-b` - Bit range (ex: 66 = busca entre 2^65 e 2^66)
 - `-t` - Número de threads
-- `-R` - Modo de busca (sequential, backward, both, random, dance)
+- `-R` - Modo de busca (sequential, backward, both, random)
 - `-l` - Tipo de busca: compress, uncompress, both
 - `-A` - Auto-tuning (safe, balanced, max)
 
@@ -51,12 +51,18 @@ Busca chaves privadas comparando endereços gerados com uma lista de endereços-
 - `-R backward` - Do fim para o início
 - `-R both` - Metade das threads para cada lado (mais rápido)
 - `-R random` - Posições aleatórias (puzzles)
-- `-R dance` - Mix aleatório de todos modos
+
 
 **Exemplos:**
 ```bash
 # Busca aleatória em puzzle 21
 Modulos/Address/modo-address -f Puzzles/21.txt -b 21 -l compress -R random -t 8
+
+# Busca backward (do fim para o início)
+Modulos/Address/modo-address -f Puzzles/21.txt -b 21 -l compress -R backward -t 8
+
+# Busca both (metade das threads cada lado)
+Modulos/Address/modo-address -f Puzzles/21.txt -b 21 -l compress -R both -t 8
 
 # Busca sequencial
 Modulos/Address/modo-address -f Puzzles/21.txt -b 21 -l compress -t 8
@@ -76,13 +82,6 @@ Baby-Step Giant-Step. Algoritmo rápido para ranges conhecidos, mas requer muita
 - Você tem RAM suficiente (mínimo 4GB, ideal 16GB+)
 - Conhece o intervalo exato da chave
 
-**Modos de busca:**
-- `-R sequential` - Do início ao fim (padrão)
-- `-R backward` - Do fim para o início
-- `-R both` - Metade das threads para cada lado (mais rápido)
-- `-R random` - Posições aleatórias (puzzles)
-- `-R dance` - Mix aleatório de todos modos
-
 **Parâmetros principais:**
 - `-f` - Arquivo com as public keys-alvo
 - `-b` - Bit range
@@ -90,6 +89,15 @@ Baby-Step Giant-Step. Algoritmo rápido para ranges conhecidos, mas requer muita
 - `-k` - Fator de memória (quanto maior = mais rápido, mais RAM)
 - `-n` - Tamanho da tabela BSGS
 - `-A` - Auto-tuning (safe, balanced, max)
+
+**Modos de busca:**
+- `-R sequential` - Do início ao fim (padrão)
+- `-R backward` - Do fim para o início
+- `-R both` - Metade das threads para cada lado (mais rápido)
+- `-R random` - Posições aleatórias (puzzles)
+- `-R dance` - Mix aleatório de todos modos
+
+
 
 **Exemplos:**
 ```bash

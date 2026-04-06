@@ -671,6 +671,11 @@ bool load_checkpoint_address(int bits) {
     return false;
 }
 
+void sleep_ms(int milliseconds);
+void init_generator();
+void menu();
+void checkpointer(void *ptr,const char *file,const char *function,const  char *name,int line);
+
 int main(int argc, char **argv)	{
     signal(SIGINT, signal_handler);
     atexit(cleanup_address);
