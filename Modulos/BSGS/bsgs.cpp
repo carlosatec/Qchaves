@@ -218,6 +218,10 @@ char *pubkeytopubaddress(char *pkey,int length);
 void pubkeytopubaddress_dst(char *pkey,int length,char *dst);
 void rmd160toaddress_dst(char *rmd,char *dst);
 
+void menu();
+void sleep_ms(int milliseconds);
+void init_generator();
+
 
 	
 void KECCAK_256(uint8_t *source, size_t size,uint8_t *dst);

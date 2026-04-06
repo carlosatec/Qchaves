@@ -1021,9 +1021,18 @@ int main(int argc, char **argv)	{
 		stride.Set(&ONE);
 	}
 	init_generator();
+	printf("[+] Generator initialized\n");
+	fflush(stdout);
 	apply_address_auto_profile_if_needed();
+	printf("[+] Auto profile applied\n");
+	fflush(stdout);
 	if(FLAGMODE == MODE_BSGS )	{
 		printf("[+] Mode BSGS %s\n",bsgs_modes[FLAGBSGSMODE]);
+		fflush(stdout);
+	}
+	else if(FLAGRANDOM) {
+		printf("[+] Mode random (using -R flag)\n");
+		fflush(stdout);
 	}
 	
 	if(FLAGFILE == 0) {
@@ -1038,6 +1047,7 @@ int main(int argc, char **argv)	{
 	if(FLAGMODE == MODE_ADDRESS && FLAGCRYPTO == CRYPTO_NONE) {	//When none crypto is defined the default search is for Bitcoin
 		FLAGCRYPTO = CRYPTO_BTC;
 		printf("[+] Setting search for btc adddress\n");
+		fflush(stdout);
 	}
 	if(FLAGRANGE) {
 		n_range_start.SetBase16(range_start);
@@ -1905,13 +1915,13 @@ int main(int argc, char **argv)	{
 
 				memset(bPload_threads_available,1,NTHREADS);
 				
-				for(j = 0; j < NTHREADS; j++)	{
+			for(j = 0; j < NTHREADS; j++)	{
 #if defined(_WIN64) && !defined(__CYGWIN__)
-					bPload_mutex = CreateMutex(NULL, FALSE, NULL);
+				bPload_mutex[j] = CreateMutex(NULL, FALSE, NULL);
 #else
-					pthread_mutex_init(&bPload_mutex[j],NULL);
+				pthread_mutex_init(&bPload_mutex[j],NULL);
 #endif
-				}
+			}
 				
 				do	{
 					for(j = 0; j < NTHREADS && !salir; j++)	{
@@ -2240,6 +2250,8 @@ int main(int argc, char **argv)	{
 		tid = (pthread_t *) calloc(NTHREADS,sizeof(pthread_t));
 #endif
 		checkpointer((void *)tid,__FILE__,"calloc","tid" ,__LINE__ -1 );
+		printf("[+] Starting %d threads...\n", NTHREADS);
+		fflush(stdout);
 		for(j= 0;j < NTHREADS; j++)	{
 			tt = (tothread*) malloc(sizeof(struct tothread));
 			checkpointer((void *)tt,__FILE__,"malloc","tt" ,__LINE__ -1 );
@@ -2263,6 +2275,8 @@ int main(int argc, char **argv)	{
 				exit(EXIT_FAILURE);
 			}
 		}
+		printf("[+] All threads started\n");
+		fflush(stdout);
 	}
 	
 	for(j =0; j < 7; j++)	{
