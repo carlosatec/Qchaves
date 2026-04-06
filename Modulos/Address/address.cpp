@@ -48,6 +48,7 @@
 #include <chrono>
 
 std::atomic<bool> SHOULD_SAVE(false);
+std::atomic<int> SIGNAL_COUNT(0);
 
 #define CRYPTO_NONE 0
 #define CRYPTO_BTC 1
@@ -131,11 +132,22 @@ Point _2Gn;
 std::vector<Point> GSn;
 Point _2GSn;
 
-void menu();
-void init_generator();
+static bool is_numeric(const char *s) {
+    if (!s || *s == '\0') return false;
+    for (int i = 0; s[i] != '\0'; i++) {
+        if (!isdigit((unsigned char)s[i])) return false;
+    }
+    return true;
+}
 
-int searchbinary(struct address_value *buffer,char *data,int64_t array_length);
-void sleep_ms(int milliseconds);
+static bool file_exists_check(const char *filename) {
+    FILE *file = fopen(filename, "r");
+    if (file) {
+        fclose(file);
+        return true;
+    }
+    return false;
+}
 
 void _sort(struct address_value *arr,int64_t N);
 #if defined(USE_RADIX_SORT) && USE_RADIX_SORT == 1
@@ -553,7 +565,14 @@ bool should_resume_address_checkpoint(const char *filename) {
 
 void signal_handler(int sig) {
     if (sig == SIGINT) {
-        SHOULD_SAVE = true;
+        int count = ++SIGNAL_COUNT;
+        if (count == 1) {
+            SHOULD_SAVE = true;
+            printf("\n[i] Interrupção detectada. Finalizando e salvando checkpoint...\n");
+        } else {
+            printf("\n[!] Forçando saída imediata...\n");
+            exit(1);
+        }
     }
 }
 
@@ -949,6 +968,26 @@ int main(int argc, char **argv)	{
 		}
 	}
 	
+	if (optind < argc) {
+		char *arg = argv[optind];
+		fprintf(stderr, "[E] Argumento inesperado encontrado: %s\n", arg);
+		if (is_numeric(arg)) {
+			int val = atoi(arg);
+			if (val > 0 && val <= 256) {
+				fprintf(stderr, "[i] Você esqueceu de colocar '-b'? Sugestão: tente usar '-b %s'\n", arg);
+			} else {
+				fprintf(stderr, "[i] Você esqueceu de colocar alguma flag? O valor parece ser um número.\n");
+			}
+		} else if (isValidHex(arg)) {
+			fprintf(stderr, "[i] Você esqueceu de colocar '-r'? Sugestão: tente usar '-r %s'\n", arg);
+		} else if (file_exists_check(arg)) {
+			fprintf(stderr, "[i] Você esqueceu de colocar '-f'? Sugestão: tente usar '-f %s'\n", arg);
+		} else {
+			fprintf(stderr, "[i] Verifique a sintaxe do comando. Use -h para ajuda.\n");
+		}
+		exit(EXIT_FAILURE);
+	}
+	
 	if(  FLAGBSGSMODE == MODE_BSGS && FLAGENDOMORPHISM)	{
 		fprintf(stderr,"[E] Endomorphism doesn't work with BSGS\n");
 		exit(EXIT_FAILURE);
@@ -984,6 +1023,11 @@ int main(int argc, char **argv)	{
 	
 	if(FLAGFILE == 0) {
 		fileName =(char*) default_fileName;
+		if (!file_exists_check(fileName)) {
+			fprintf(stderr, "[E] Arquivo de alvos padrão 'addresses.txt' não encontrado.\n");
+			fprintf(stderr, "[i] Use '-f <arquivo>' para especificar sua lista de endereços ou public keys.\n");
+			exit(EXIT_FAILURE);
+		}
 	}
 	
 	if(FLAGMODE == MODE_ADDRESS && FLAGCRYPTO == CRYPTO_NONE) {	//When none crypto is defined the default search is for Bitcoin
@@ -1020,10 +1064,10 @@ int main(int argc, char **argv)	{
 	if(FLAGMODE != MODE_BSGS)	{
 		BSGS_N.SetInt32(DEBUGCOUNT);
 		if(FLAGRANGE == 0 && FLAGBITRANGE == 0)	{
-			n_range_start.SetInt32(1);
-			n_range_end.Set(&secp->order);
-			n_range_diff.Set(&n_range_end);
-			n_range_diff.Sub(&n_range_start);
+			fprintf(stderr, "[E] Erro: Nenhum intervalo (-b ou -r) especificado.\n");
+			fprintf(stderr, "[i] O programa não iniciará a busca no intervalo padrão de 256 bits por segurança.\n");
+			fprintf(stderr, "[i] Use -b <bits> ou -r <inicio:fim> para definir a busca.\n");
+			exit(EXIT_FAILURE);
 		}
 		else	{
 			if(FLAGBITRANGE)	{
@@ -2609,6 +2653,9 @@ void *thread_process(void *vargp)	{
 				continue_flag = 0;
 			}
 		}
+		if (SHOULD_SAVE) {
+			continue_flag = 0;
+		}
 		if(continue_flag)	{
 			count = 0;
 			bool startP_valid = false;
@@ -3125,9 +3172,9 @@ void *thread_process(void *vargp)	{
 				pp.y.ModMulK1(&_s);
 				pp.y.ModSub(&_2Gn.y);
 				startP = pp;
-			}while(count < N_SEQUENTIAL_MAX && continue_flag);
+			}while(count < N_SEQUENTIAL_MAX && continue_flag && !SHOULD_SAVE);
 		}
-	} while(continue_flag);
+	} while(continue_flag && !SHOULD_SAVE);
 	delete grp;
 	ends_store_release(thread_number, 1);
 	return NULL;

@@ -142,6 +142,7 @@ std::atomic<uint64_t> TOTAL_TRAPS(0);
 std::atomic<uint64_t> TOTAL_DPS(0);
 std::atomic<uint64_t> TOTAL_FLUSHES(0);
 std::atomic<bool> SHOULD_SAVE(false);
+std::atomic<int> SIGNAL_COUNT(0);
 std::atomic<bool> KEY_FOUND_FLAG(false);
 std::atomic<bool> FLUSH_IN_PROGRESS(false);
 std::atomic<uint64_t> TIME_JUMPS_NS(0);
@@ -606,7 +607,14 @@ bool u192_from_bytes32(const unsigned char in[32], UInt192& out) {
 
 void signal_handler(int sig) {
     if (sig == SIGINT) {
-        SHOULD_SAVE = true;
+        int count = ++SIGNAL_COUNT;
+        if (count == 1) {
+            SHOULD_SAVE = true;
+            printf("\n[i] Interrupção detectada. Finalizando frotas e salvando checkpoint...\n");
+        } else {
+            printf("\n[!] Forçando saída imediata...\n");
+            exit(1);
+        }
     }
 }
 
@@ -1351,8 +1359,8 @@ void build_current_snapshot(std::array<SnapshotMap, TRAP_SHARDS>& snapshots) {
     }
 }
 
-bool process_archive_file(FILE* f, const SnapshotMap& snapshot) {
-    while (!KEY_FOUND_FLAG) {
+bool process_archive_file(FILE *f, const SnapshotMap &snapshot) {
+    while (!KEY_FOUND_FLAG && !SHOULD_SAVE) {
         TrapEntry archived;
         if (fread(&archived.is_wild, 1, 1, f) != 1) {
             break;
@@ -1725,6 +1733,22 @@ void initialize_new_search() {
     }
 }
 
+static bool is_numeric_kangaroo(const char *s) {
+    if (!s || *s == '\0') return false;
+    for (int i = 0; s[i] != '\0'; i++) {
+        if (!isdigit((unsigned char)s[i])) return false;
+    }
+    return true;
+}
+
+static bool is_hex_string_kangaroo(const char *s) {
+    if (!s || *s == '\0') return false;
+    for (int i = 0; s[i] != '\0'; i++) {
+        if (!isxdigit((unsigned char)s[i])) return false;
+    }
+    return true;
+}
+
 void cleanup() {
     for (ThreadContext* tc : threads_data) {
         if (tc == nullptr) {
@@ -1849,16 +1873,40 @@ int main(int argc, char** argv) {
                 ACTIVE_WILD_COUNT = std::max(0, std::min(atoi(optarg), FLEET_SIZE));
                 OVERRIDE_WILD = true;
                 break;
-            default:
-                menu();
-                break;
         }
+    }
+
+    if (optind < argc) {
+        char *arg = argv[optind];
+        fprintf(stderr, "[E] Argumento inesperado encontrado: %s\n", arg);
+        if (strstr(arg, ":") != nullptr) {
+            fprintf(stderr, "[i] Você esqueceu de colocar '-r'? Sugestão: tente usar '-r %s'\n", arg);
+        } else if (is_hex_string_kangaroo(arg)) {
+            size_t len = strlen(arg);
+            if (len == 66 || len == 130) {
+                fprintf(stderr, "[i] Você esqueceu de colocar '-p'? Sugestão: tente usar '-p %s'\n", arg);
+            } else {
+                fprintf(stderr, "[i] Você esqueceu de colocar '-r'? Sugestão: tente usar '-r %s'\n", arg);
+            }
+        } else if (is_numeric_kangaroo(arg)) {
+            fprintf(stderr, "[i] Você esqueceu de colocar '-b'? Sugestão: tente usar '-b %s'\n", arg);
+        } else {
+            fprintf(stderr, "[i] Verifique a sintaxe do comando. Use -h para ajuda.\n");
+        }
+        exit(1);
     }
 
     apply_auto_profile_if_needed();
 
     if (TARGET_PUBKEY_HEX.empty()) {
         fprintf(stderr, "[E] Chave publica alvo (-p) e obrigatoria.\n");
+        fprintf(stderr, "[i] Use '-p <public_key_hex>' para definir seu alvo.\n");
+        return 1;
+    }
+
+    if (RANGE_START == "1" && RANGE_END.empty() && FLAG_BITRANGE == 0) {
+        fprintf(stderr, "[E] Nenhum intervalo de busca especificado (-r ou -b).\n");
+        fprintf(stderr, "[i] A busca Pollard's Kangaroo requer um intervalo finito.\n");
         return 1;
     }
 
