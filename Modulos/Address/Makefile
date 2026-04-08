@@ -2,7 +2,7 @@ CXX = g++
 CC = gcc
 OLEVEL = -O3
 
-COMMON_FLAGS = -I../../libs -m64 -Wall -Wextra -Wno-deprecated-copy -Wno-unused-parameter $(OLEVEL) -ftree-vectorize -flto -DUSE_RADIX_SORT=1
+COMMON_FLAGS = -I../../libs -m64 -Wall -Wextra -Wno-deprecated-copy -Wno-unused-parameter $(OLEVEL) -DUSE_RADIX_SORT=1
 
 ifeq ($(PORTABLE),1)
     ARCH_FLAGS = -mtune=generic

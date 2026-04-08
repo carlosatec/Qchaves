@@ -727,21 +727,12 @@ int main(int argc, char **argv)	{
 	rseed(clock() + time(NULL) + rand());
 #else
 	unsigned long rseedvalue;
-	int bytes_read = getrandom(&rseedvalue, sizeof(unsigned long), GRND_NONBLOCK);
+	int bytes_read = getrandom(&rseedvalue, sizeof(unsigned long), 0);
 	if(bytes_read > 0)	{
 		rseed(rseedvalue);
-		/*
-		In any case that seed is for a failsafe RNG, the default source on linux is getrandom function
-		See https://www.2uo.de/myths-about-urandom/
-		*/
 	}
 	else	{
-		/*
-			what year is??
-			WTF linux without RNG ? 
-		*/
-		fprintf(stderr,"[E] Error getrandom() ?\n");
-		exit(EXIT_FAILURE);
+		rseed(clock() + time(NULL) + getpid());
 	}
 #endif
 	
