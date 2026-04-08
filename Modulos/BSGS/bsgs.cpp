@@ -812,7 +812,7 @@ int main(int argc, char **argv)	{
 	
 	
 
-	while ((c = getopt(argc, argv, "deh6qSR:b:c:E:f:I:k:l:m:N:n:p:r:s:t:G:A")) != -1) {
+	while ((c = getopt(argc, argv, "deh6qSR:b:c:E:f:I:k:l:m:N:n:p:r:s:t:G:A:")) != -1) {
 		switch(c) {
 			case 'A':
 				FLAG_AUTO_PROFILE = true;
