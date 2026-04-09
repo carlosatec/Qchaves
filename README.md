@@ -42,7 +42,7 @@ Busca chaves privadas comparando endereços gerados com uma lista de endereços-
 - `-f` - Arquivo com os endereços-alvo (formato: 1... ou pubkey hex)
 - `-b` - Bit range (ex: 66 = busca entre 2^65 e 2^66)
 - `-t` - Número de threads
-- `-R` - Modo de busca (sequential, backward, both, random)
+- `-R` - Modo de busca (sequential, backward, both, random, partitioned)
 - `-l` - Tipo de busca: compress, uncompress, both
 - `-A` - Auto-tuning (safe, balanced, max)
 
@@ -51,6 +51,7 @@ Busca chaves privadas comparando endereços gerados com uma lista de endereços-
 - `-R backward` - Do fim para o início
 - `-R both` - Metade das threads para cada lado (mais rápido)
 - `-R random` - Posições aleatórias (puzzles)
+- `-R partitioned` - Divide o intervalo total em sub-faixas contínuas, 1 por thread. Modélagem assíncrona (livre de perdas por Mutex), acelerando processadores com muito núcleos.
 
 
 **Exemplos:**
@@ -66,6 +67,9 @@ Busca chaves privadas comparando endereços gerados com uma lista de endereços-
 
 # Busca sequencial
 ./modo-address -f Puzzles/21.txt -b 21 -l compress -t 8
+
+# Busca particionada de alta performance
+./modo-address -f Puzzles/21.txt -b 21 -R partitioned -t 8
 
 # Auto-tuning (recomendado)
 ./modo-address -A balanced -f Puzzles/21.txt -b 21

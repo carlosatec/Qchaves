@@ -83,6 +83,8 @@ struct tothread {
 	char *rs;   //range start
 	char *rpt;  //rng per thread
 	uint32_t rng_state;  // RNG state per thread
+	Int partition_start;
+	Int partition_end;
 };
 
 static inline uint32_t thread_rand(uint32_t* state) {
@@ -207,6 +209,7 @@ DWORD WINAPI thread_process_bsgs_backward(LPVOID vargp);
 DWORD WINAPI thread_process_bsgs_both(LPVOID vargp);
 DWORD WINAPI thread_process_bsgs_random(LPVOID vargp);
 DWORD WINAPI thread_process_bsgs_dance(LPVOID vargp);
+DWORD WINAPI thread_process_partitioned(LPVOID vargp);
 DWORD WINAPI thread_bPload(LPVOID vargp);
 DWORD WINAPI thread_bPload_2cuckoos(LPVOID vargp);
 #else
@@ -216,6 +219,7 @@ void *thread_process_bsgs_backward(void *vargp);
 void *thread_process_bsgs_both(void *vargp);
 void *thread_process_bsgs_random(void *vargp);
 void *thread_process_bsgs_dance(void *vargp);
+void *thread_process_partitioned(void *vargp);
 void *thread_bPload(void *vargp);
 void *thread_bPload_2cuckoos(void *vargp);
 #endif
@@ -232,7 +236,7 @@ int THREADOUTPUT = 0;
 char *bit_range_str_min;
 char *bit_range_str_max;
 
-const char *bsgs_modes[5] = {"sequential","backward","both","random","dance"};
+const char *bsgs_modes[6] = {"sequential","backward","both","random","partitioned","dance"};
 const char *modes[2] = {"address","bsgs"};
 const char *cryptos[3] = {"btc","eth","all"};
 const char *publicsearch[3] = {"uncompress","compress","both"};
@@ -434,6 +438,8 @@ Int int_limits[7];
 
 Int BSGS_GROUP_SIZE;
 Int BSGS_CURRENT;
+Int partition_cursors[256];
+Int partition_starts[256];
 Int BSGS_R;
 Int BSGS_AUX;
 Int BSGS_N;
@@ -624,28 +630,45 @@ void cleanup_address() {
     #endif
 }
 
+bool is_resuming_checkpoint = false;
+
 void save_checkpoint_address(int bits) {
     char filename[256];
     sprintf(filename, "address_bit%d.ckp", bits);
     FILE *f = fopen(filename, "wb");
     if (f) {
-        Int cursor;
-        Int range_end_snapshot;
-        Int original_start_snapshot;
-        Int forward_covered_snapshot;
-        int random_mode = 0;
-        snapshot_address_progress(&cursor, &range_end_snapshot, &original_start_snapshot, &forward_covered_snapshot, &random_mode);
-        char *cursor_hex = cursor.GetBase16();
-        char *range_end_hex = range_end_snapshot.GetBase16();
-        char *original_start_hex = original_start_snapshot.GetBase16();
-        char *forward_covered_hex = forward_covered_snapshot.GetBase16();
-        // ADDR4 format: bits, mode, random, original_start, cursor, range_end, forward_covered
-        fprintf(f, "ADDR4\n%d\n%d\n%d\n%s\n%s\n%s\n%s\n", bits, FLAGBSGSMODE, random_mode, original_start_hex, cursor_hex, range_end_hex, forward_covered_hex);
+        if (FLAGBSGSMODE == 4) { // partitioned
+            char *original_start_hex = n_range_start_original.GetBase16();
+            char *range_end_hex = n_range_end_original.GetBase16();
+            fprintf(f, "ADDR5\n%d\n%d\n%d\n%s\n%s\n", bits, FLAGBSGSMODE, NTHREADS, original_start_hex, range_end_hex);
+            free(original_start_hex);
+            free(range_end_hex);
+            for (int i = 0; i < NTHREADS; i++) {
+                char *c_hex = partition_cursors[i].GetBase16();
+                char *pe_hex = partition_starts[i].GetBase16(); // Save partition_starts so we can reconstruct progress mathematically and exactly
+                fprintf(f, "%s %s\n", c_hex, pe_hex);
+                free(c_hex);
+                free(pe_hex);
+            }
+        } else {
+            Int cursor;
+            Int range_end_snapshot;
+            Int original_start_snapshot;
+            Int forward_covered_snapshot;
+            int random_mode = 0;
+            snapshot_address_progress(&cursor, &range_end_snapshot, &original_start_snapshot, &forward_covered_snapshot, &random_mode);
+            char *cursor_hex = cursor.GetBase16();
+            char *range_end_hex = range_end_snapshot.GetBase16();
+            char *original_start_hex = original_start_snapshot.GetBase16();
+            char *forward_covered_hex = forward_covered_snapshot.GetBase16();
+            // ADDR4 format: bits, mode, random, original_start, cursor, range_end, forward_covered
+            fprintf(f, "ADDR4\n%d\n%d\n%d\n%s\n%s\n%s\n%s\n", bits, FLAGBSGSMODE, random_mode, original_start_hex, cursor_hex, range_end_hex, forward_covered_hex);
+            free(cursor_hex);
+            free(range_end_hex);
+            free(original_start_hex);
+            free(forward_covered_hex);
+        }
         fclose(f);
-        free(cursor_hex);
-        free(range_end_hex);
-        free(original_start_hex);
-        free(forward_covered_hex);
     }
 }
 
@@ -662,8 +685,39 @@ bool load_checkpoint_address(int bits) {
         int fbits;
         int mode_snapshot = 0;
         int random_mode = 0;
+        int n_threads_ckp = 0;
         if (fscanf(f, "%15s", magic) == 1) {
-            if (strcmp(magic, "ADDR4") == 0) {
+            if (strcmp(magic, "ADDR5") == 0) {
+                if (fscanf(f, "%d\n%d\n%d\n%127s\n%127s\n", &fbits, &mode_snapshot, &n_threads_ckp, original_start_hex, range_end_hex) == 5 && fbits == bits) {
+                    if (n_threads_ckp != NTHREADS) {
+                        fprintf(stderr, "\n[E] ERRO FATAL: O checkpoint no modo 'partitioned' foi salvo com %d threads, mas a retomada exige as mesmas %d threads. Abortando retomada.\n", n_threads_ckp, n_threads_ckp);
+                        fclose(f);
+                        return false;
+                    }
+                    if (should_resume_address_checkpoint(filename)) {
+                        n_range_start_original.SetBase16(original_start_hex);
+                        n_range_end_original.SetBase16(range_end_hex);
+                        
+                        for (int i = 0; i < NTHREADS; i++) {
+                            char c_hex[128] = {0};
+                            char pe_hex[128] = {0};
+                            if (fscanf(f, "%127s %127s\n", c_hex, pe_hex) == 2) {
+                                partition_cursors[i].SetBase16(c_hex);
+                                partition_starts[i].SetBase16(pe_hex);
+                            }
+                        }
+                        
+                        n_range_diff.Set(&n_range_end_original);
+                        n_range_diff.Sub(&n_range_start_original);
+                        FLAGBSGSMODE = mode_snapshot;
+                        is_resuming_checkpoint = true;
+                        printf("[+] Retomando da posição particionada (mode: %s)\n", bsgs_modes[FLAGBSGSMODE]);
+                        printf("[+] Início original total: 0x%s\n", original_start_hex);
+                        fclose(f);
+                        return true;
+                    }
+                }
+            } else if (strcmp(magic, "ADDR4") == 0) {
                 if (fscanf(f, "%d\n%d\n%d\n%127s\n%127s\n%127s\n%127s\n", &fbits, &mode_snapshot, &random_mode, original_start_hex, cursor_hex, range_end_hex, forward_covered_hex) == 7 && fbits == bits) {
                     if (should_resume_address_checkpoint(filename)) {
                         n_range_start_original.SetBase16(original_start_hex);
@@ -675,6 +729,7 @@ bool load_checkpoint_address(int bits) {
                         n_range_diff.Sub(&n_range_start_original);
                         FLAGBSGSMODE = mode_snapshot;
                         FLAGRANDOM = random_mode;
+                        is_resuming_checkpoint = true;
                         printf("[+] Retomando da posição: 0x%s (mode: %s)\n", cursor_hex, bsgs_modes[FLAGBSGSMODE]);
                         printf("[+] Início original: 0x%s\n", original_start_hex);
                         fclose(f);
@@ -689,6 +744,7 @@ bool load_checkpoint_address(int bits) {
                         // Legacy: no original start saved, so n_range_start_original stays at init value
                         FLAGBSGSMODE = mode_snapshot;
                         FLAGRANDOM = random_mode;
+                        is_resuming_checkpoint = true;
                         printf("[+] Retomando da posição: 0x%s (mode: %s, formato legado)\n", cursor_hex, bsgs_modes[FLAGBSGSMODE]);
                         fclose(f);
                         return true;
@@ -701,6 +757,7 @@ bool load_checkpoint_address(int bits) {
                         n_range_end.SetBase16(range_end_hex);
                         FLAGRANDOM = random_mode;
                         FLAGBSGSMODE = random_mode ? 3 : 0;
+                        is_resuming_checkpoint = true;
                         printf("[+] Retomando da posição: 0x%s (modo legado)\n", cursor_hex);
                         fclose(f);
                         return true;
@@ -710,6 +767,7 @@ bool load_checkpoint_address(int bits) {
                 if (fscanf(f, "%d\n%127s\n", &fbits, cursor_hex) == 2 && fbits == bits) {
                     if (should_resume_address_checkpoint(filename)) {
                         n_range_start.SetBase16(cursor_hex);
+                        is_resuming_checkpoint = true;
                         printf("[+] Retomando da posição: 0x%s (formato antigo)\n", cursor_hex);
                         fclose(f);
                         return true;
@@ -814,8 +872,8 @@ int main(int argc, char **argv)	{
 					fprintf(stderr,"[E] -R requires an argument\n");
 					exit(EXIT_FAILURE);
 				}
-				index_value = indexOf(optarg,bsgs_modes,5);
-				if(index_value >= 0 && index_value <= 4)	{
+				index_value = indexOf(optarg,bsgs_modes,6);
+				if(index_value >= 0 && index_value <= 5)	{
 					FLAGBSGSMODE = index_value;
 					if (index_value == 3) {
 						FLAGRANDOM = 1;
@@ -2304,6 +2362,22 @@ int main(int argc, char **argv)	{
 		tid = (pthread_t *) calloc(NTHREADS,sizeof(pthread_t));
 #endif
 		checkpointer((void *)tid,__FILE__,"calloc","tid" ,__LINE__ -1 );
+		Int partition_size;
+		if (FLAGBSGSMODE == 4) {
+			partition_size.Set(&n_range_diff);
+			Int n_t;
+			n_t.SetInt32(NTHREADS);
+			partition_size.Div(&n_t);
+			Int align; align.SetInt32(1024);
+			Int remainder;
+			remainder.Set(&partition_size);
+			remainder.Mod(&align);
+			if (!remainder.IsZero()) {
+				partition_size.Sub(&remainder);
+				partition_size.Add(&align);
+			}
+		}
+
 		printf("[+] Starting %d threads...\n", NTHREADS);
 		fflush(stdout);
 		for(j= 0;j < NTHREADS; j++)	{
@@ -2311,16 +2385,41 @@ int main(int argc, char **argv)	{
 			checkpointer((void *)tt,__FILE__,"malloc","tt" ,__LINE__ -1 );
 			tt->nt = j;
 			tt->rng_state = (uint32_t)(clock() + time(NULL) + j * 12345);
+			
+			if (FLAGBSGSMODE == 4) {
+				tt->partition_start.Set(&n_range_start_original);
+				Int offset; offset.Set(&partition_size); offset.Mult(j);
+				tt->partition_start.Add(&offset);
+				
+				tt->partition_end.Set(&tt->partition_start);
+				tt->partition_end.Add(&partition_size);
+				
+				if (tt->partition_end.IsGreater(&n_range_end_original)) {
+					tt->partition_end.Set(&n_range_end_original);
+				}
+				
+				if (!is_resuming_checkpoint) {
+					partition_starts[j].Set(&tt->partition_start);
+					partition_cursors[j].Set(&tt->partition_start);
+				}
+			}
+
 			steps[j] = 0;
 			s = 0;
 			switch(FLAGMODE)	{
 #if defined(_WIN64) && !defined(__CYGWIN__)
 				case MODE_ADDRESS:
-					tid[j] = CreateThread(NULL, 0, thread_process, (void*)tt, 0, &s);
+					if (FLAGBSGSMODE == 4)
+						tid[j] = CreateThread(NULL, 0, thread_process_partitioned, (void*)tt, 0, &s);
+					else
+						tid[j] = CreateThread(NULL, 0, thread_process, (void*)tt, 0, &s);
 				break;
 #else
 				case MODE_ADDRESS:
-					s = pthread_create(&tid[j],NULL,thread_process,(void *)tt);
+					if (FLAGBSGSMODE == 4)
+						s = pthread_create(&tid[j],NULL,thread_process_partitioned,(void *)tt);
+					else
+						s = pthread_create(&tid[j],NULL,thread_process,(void *)tt);
 				break;
 #endif
 			}
@@ -2432,12 +2531,21 @@ int main(int argc, char **argv)	{
 					range_total.Set(&n_range_diff);
 					
 					Int range_progress;
-					if (FLAGMODE == MODE_BSGS) {
+					if (FLAGBSGSMODE == 4) {
+						range_progress.SetInt32(0);
+						for (int i = 0; i < NTHREADS; i++) {
+							Int thread_diff;
+							thread_diff.Set(&partition_cursors[i]);
+							thread_diff.Sub(&partition_starts[i]);
+							range_progress.Add(&thread_diff);
+						}
+					} else if (FLAGMODE == MODE_BSGS) {
 						range_progress.Set(&BSGS_CURRENT);
+						range_progress.Sub(&n_range_start_original);
 					} else {
 						range_progress.Set(&n_range_start);
+						range_progress.Sub(&n_range_start_original);
 					}
-					range_progress.Sub(&n_range_start_original);
 					
 					Int percent;
 					percent.Set(&range_progress);
@@ -2449,8 +2557,13 @@ int main(int argc, char **argv)	{
 					rate_per_sec.Div(&seconds);
 					
 					Int remaining_keys;
-					remaining_keys.Set(&n_range_end);
-					remaining_keys.Sub(&n_range_start);
+					if (FLAGBSGSMODE == 4) {
+						remaining_keys.Set(&range_total);
+						remaining_keys.Sub(&range_progress);
+					} else {
+						remaining_keys.Set(&n_range_end);
+						remaining_keys.Sub(&n_range_start);
+					}
 					
 					Int eta_seconds;
 					if (!rate_per_sec.IsZero()) {
@@ -6317,4 +6430,603 @@ void calcualteindex(int i,Int *key)	{
 		key->Mult(&BSGS_M3_double);
 		key->Add(&BSGS_M3);
 	}
+}
+
+#if defined(_WIN64) && !defined(__CYGWIN__)
+DWORD WINAPI thread_process_partitioned(LPVOID vargp) {
+#else
+void *thread_process_partitioned(void *vargp)	{
+#endif
+	struct tothread *tt;
+	Point pts[CPU_GRP_SIZE];
+	Point endomorphism_beta[CPU_GRP_SIZE];
+	Point endomorphism_beta2[CPU_GRP_SIZE];
+	Point endomorphism_negeted_point[4];
+	
+	Int dx[CPU_GRP_SIZE / 2 + 1];
+	IntGroup *grp = new IntGroup(CPU_GRP_SIZE / 2 + 1);
+	Point startP;
+	Int dy;
+	Int dyn;
+	Int _s;
+	Int _p;
+	Point pp;
+	Point pn;
+	int i,l,pp_offset,pn_offset,hLength = (CPU_GRP_SIZE / 2 - 1);
+	uint64_t j,count;
+	Point R,temporal,publickey;
+	int r,thread_number,continue_flag = 1,k;
+	char *hextemp = NULL;
+	
+	char publickeyhashrmd160[20];
+	char publickeyhashrmd160_uncompress[4][20];
+	
+	char publickeyhashrmd160_endomorphism[12][4][20];
+
+	/* ── Opt 4: Hoist globals to thread-local const copies ──────────────────
+	   Com esses valores marcados como const, o GCC (-Ofast) trata as flags
+	   como constantes de compilação efetiva dentro desta thread, eliminando
+	   false-sharing de cache entre threads e permitindo dead-code elimination
+	   dos branches never-taken (ex: if(calculate_y) em modo compress).
+	   ──────────────────────────────────────────────────────────────────── */
+	const int  loc_mode    = FLAGMODE;
+	const int  loc_search  = FLAGSEARCH;
+	const int  loc_crypto  = FLAGCRYPTO;
+	const int  loc_endo    = FLAGENDOMORPHISM;
+	const int  loc_maxlen  = MAXLENGTHADDRESS;
+	const bool loc_is_btc  = (loc_crypto == CRYPTO_BTC);
+	const bool loc_is_eth  = (loc_crypto == CRYPTO_ETH);
+	const bool do_compress = (loc_search == SEARCH_COMPRESS || loc_search == SEARCH_BOTH);
+	const bool do_uncompress = (loc_search == SEARCH_UNCOMPRESS || loc_search == SEARCH_BOTH);
+
+	/* ── Opt 3: const bool permite eliminar if(false) pelo compilador ─── */
+	const bool calculate_y = do_uncompress || loc_is_eth;
+
+	Int key_mpz,keyfound,temp_stride;
+	tt = (struct tothread *)vargp;
+	Int partition_end_local;
+	partition_end_local.Set(&tt->partition_end);
+	key_mpz.Set(&tt->partition_start);
+	thread_number = tt->nt;
+	uint32_t rng_state = tt->rng_state;  // RNG state por thread
+	Int range_block_start, range_block_end;
+	uint64_t block_counter = 0;
+	uint64_t BLOCK_SIZE = 1048576;  // 1M chaves por block
+	free(tt);
+	grp->Set(dx);
+	do {
+		key_mpz.Set(&partition_cursors[thread_number]);
+		if (!key_mpz.IsLower(&partition_end_local)) {
+			continue_flag = 0;
+		}
+		if (SHOULD_SAVE) {
+			continue_flag = 0;
+		}
+		if(continue_flag)	{
+			count = 0;
+			bool startP_valid = false;
+			if(FLAGQUIET == 0){
+				hextemp = key_mpz.GetBase16();
+				printf("\rBase key: %s     \r",hextemp);
+				fflush(stdout);
+				free(hextemp);
+				THREADOUTPUT = 1;
+			}
+			do {
+				if(!startP_valid)	{
+					temp_stride.SetInt32(CPU_GRP_SIZE / 2);
+					temp_stride.Mult(&stride);
+					key_mpz.Add(&temp_stride);
+	 				startP = secp->ComputePublicKey(&key_mpz);
+					key_mpz.Sub(&temp_stride);
+					startP_valid = true;
+				}
+
+				for(i = 0; i < hLength; i++) {
+					dx[i].ModSub(&Gn[i].x,&startP.x);
+				}
+			
+				dx[i].ModSub(&Gn[i].x,&startP.x);  // For the first point
+				dx[i + 1].ModSub(&_2Gn.x,&startP.x); // For the next center point
+				grp->ModInv();
+
+				pts[CPU_GRP_SIZE / 2] = startP;
+
+				for(i = 0; i<hLength; i++) {
+					pp = startP;
+					pn = startP;
+
+					// P = startP + i*G
+					dy.ModSub(&Gn[i].y,&pp.y);
+
+					_s.ModMulK1(&dy,&dx[i]);        // s = (p2.y-p1.y)*inverse(p2.x-p1.x);
+					_p.ModSquareK1(&_s);            // _p = pow2(s)
+
+					pp.x.ModNeg();
+					pp.x.ModAdd(&_p);
+					pp.x.ModSub(&Gn[i].x);           // rx = pow2(s) - p1.x - p2.x;
+
+					if(calculate_y)	{
+						pp.y.ModSub(&Gn[i].x,&pp.x);
+						pp.y.ModMulK1(&_s);
+						pp.y.ModSub(&Gn[i].y);           // ry = - p2.y - s*(ret.x-p2.x);
+					}
+
+					// P = startP - i*G  , if (x,y) = i*G then (x,-y) = -i*G
+					dyn.Set(&Gn[i].y);
+					dyn.ModNeg();
+					dyn.ModSub(&pn.y);
+
+					_s.ModMulK1(&dyn,&dx[i]);      // s = (p2.y-p1.y)*inverse(p2.x-p1.x);
+					_p.ModSquareK1(&_s);            // _p = pow2(s)
+					pn.x.ModNeg();
+					pn.x.ModAdd(&_p);
+					pn.x.ModSub(&Gn[i].x);          // rx = pow2(s) - p1.x - p2.x;
+
+					if(calculate_y)	{
+						pn.y.ModSub(&Gn[i].x,&pn.x);
+						pn.y.ModMulK1(&_s);
+						pn.y.ModAdd(&Gn[i].y);          // ry = - p2.y - s*(ret.x-p2.x);
+					}
+
+					pp_offset = CPU_GRP_SIZE / 2 + (i + 1);
+					pn_offset = CPU_GRP_SIZE / 2 - (i + 1);
+
+					pts[pp_offset] = pp;
+					pts[pn_offset] = pn;
+					
+					if(loc_endo)	{
+						/*
+							Q = (x,y)
+							For any point Q
+							Q*lambda = (x*beta mod p ,y)
+							Q*lambda is a Scalar Multiplication
+							x*beta is just a Multiplication (Very fast)
+						*/
+						
+						if( calculate_y  )	{
+							endomorphism_beta[pp_offset].y.Set(&pp.y);
+							endomorphism_beta[pn_offset].y.Set(&pn.y);
+							endomorphism_beta2[pp_offset].y.Set(&pp.y);
+							endomorphism_beta2[pn_offset].y.Set(&pn.y);
+						}
+						endomorphism_beta[pp_offset].x.ModMulK1(&pp.x, &beta);
+						endomorphism_beta[pn_offset].x.ModMulK1(&pn.x, &beta);
+						endomorphism_beta2[pp_offset].x.ModMulK1(&pp.x, &beta2);
+						endomorphism_beta2[pn_offset].x.ModMulK1(&pn.x, &beta2);
+					}
+				}
+				/*
+					Half point for endomorphism because pts[CPU_GRP_SIZE / 2] was not calcualte in the previous cycle
+				*/
+				if(loc_endo)	{
+					if( calculate_y  )	{
+
+						endomorphism_beta[CPU_GRP_SIZE / 2].y.Set(&pts[CPU_GRP_SIZE / 2].y);
+						endomorphism_beta2[CPU_GRP_SIZE / 2].y.Set(&pts[CPU_GRP_SIZE / 2].y);
+					}
+					endomorphism_beta[CPU_GRP_SIZE / 2].x.ModMulK1(&pts[CPU_GRP_SIZE / 2].x, &beta);
+					endomorphism_beta2[CPU_GRP_SIZE / 2].x.ModMulK1(&pts[CPU_GRP_SIZE / 2].x, &beta2);
+				}
+
+				// First point (startP - (GRP_SZIE/2)*G)
+				pn = startP;
+				dyn.Set(&Gn[i].y);
+				dyn.ModNeg();
+				dyn.ModSub(&pn.y);
+
+				_s.ModMulK1(&dyn,&dx[i]);
+				_p.ModSquareK1(&_s);
+
+				pn.x.ModNeg();
+				pn.x.ModAdd(&_p);
+				pn.x.ModSub(&Gn[i].x);
+				
+				if(calculate_y)	{
+					pn.y.ModSub(&Gn[i].x,&pn.x);
+					pn.y.ModMulK1(&_s);
+					pn.y.ModAdd(&Gn[i].y);
+				}
+
+				pts[0] = pn;
+				
+				/*
+					First point for endomorphism because pts[0] was not calcualte previously
+				*/
+				if(loc_endo)	{
+					if( calculate_y  )	{
+						endomorphism_beta[0].y.Set(&pn.y);
+						endomorphism_beta2[0].y.Set(&pn.y);
+					}
+					endomorphism_beta[0].x.ModMulK1(&pn.x, &beta);
+					endomorphism_beta2[0].x.ModMulK1(&pn.x, &beta2);
+				}
+								
+				/* ── Opt 1: Loop único compute+check por batch ─────────────────────────
+				   Antes: dois switch(FLAGMODE) separados — o primeiro calcula os hashes
+				   e o segundo verifica. Eram 2×(CPU_GRP_SIZE/4) = 512 branches por batch.
+				   Agora: um único loop faz compute+check por slot j, sem repetição.
+				   ────────────────────────────────────────────────────────────────── */
+				for(j = 0; j < CPU_GRP_SIZE/4;j++){
+					if(loc_mode == MODE_ADDRESS && loc_is_btc && !loc_endo) {
+						if(do_compress) {
+							secp->GetHash160_fromX(P2PKH,0x02,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[0][0],(uint8_t*)publickeyhashrmd160_endomorphism[0][1],(uint8_t*)publickeyhashrmd160_endomorphism[0][2],(uint8_t*)publickeyhashrmd160_endomorphism[0][3]);
+							secp->GetHash160_fromX(P2PKH,0x03,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[1][0],(uint8_t*)publickeyhashrmd160_endomorphism[1][1],(uint8_t*)publickeyhashrmd160_endomorphism[1][2],(uint8_t*)publickeyhashrmd160_endomorphism[1][3]);
+						}
+						if(do_uncompress) {
+							secp->GetHash160(P2PKH,false,pts[(j*4)],pts[(j*4)+1],pts[(j*4)+2],pts[(j*4)+3],(uint8_t*)publickeyhashrmd160_uncompress[0],(uint8_t*)publickeyhashrmd160_uncompress[1],(uint8_t*)publickeyhashrmd160_uncompress[2],(uint8_t*)publickeyhashrmd160_uncompress[3]);
+						}
+
+						for(k = 0; k < 4; k++) {
+							if(do_compress) {
+								for(l = 0; l < 2; l++) {
+									r = cuckoo_check(&cuckoo,publickeyhashrmd160_endomorphism[l][k],loc_maxlen);
+									if(r) {
+										r = searchbinary(addressTable,publickeyhashrmd160_endomorphism[l][k],N);
+										if(r) {
+											keyfound.SetInt32(k);
+											keyfound.Mult(&stride);
+											keyfound.Add(&key_mpz);
+											publickey = secp->ComputePublicKey(&keyfound);
+											secp->GetHash160(P2PKH,true,publickey,(uint8_t*)publickeyhashrmd160);
+											if(memcmp(publickeyhashrmd160_endomorphism[l][k],publickeyhashrmd160,20) != 0)	{
+												keyfound.Neg();
+												keyfound.Add(&secp->order);
+											}
+											writekey(true,&keyfound);
+										}
+									}
+								}
+							}
+							if(do_uncompress) {
+								r = cuckoo_check(&cuckoo,publickeyhashrmd160_uncompress[k],loc_maxlen);
+								if(r) {
+									r = searchbinary(addressTable,publickeyhashrmd160_uncompress[k],N);
+									if(r) {
+										keyfound.SetInt32(k);
+										keyfound.Mult(&stride);
+										keyfound.Add(&key_mpz);
+										writekey(false,&keyfound);
+									}
+								}
+							}
+						}
+						count+=4;
+						temp_stride.SetInt32(4);
+						temp_stride.Mult(&stride);
+						key_mpz.Add(&temp_stride);
+						continue;
+					}
+
+					switch(loc_mode)	{
+						case MODE_ADDRESS:
+							if(loc_is_btc){
+								
+								if(do_compress){
+									if(loc_endo)	{
+										secp->GetHash160_fromX(P2PKH,0x02,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[0][0],(uint8_t*)publickeyhashrmd160_endomorphism[0][1],(uint8_t*)publickeyhashrmd160_endomorphism[0][2],(uint8_t*)publickeyhashrmd160_endomorphism[0][3]);
+										secp->GetHash160_fromX(P2PKH,0x03,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[1][0],(uint8_t*)publickeyhashrmd160_endomorphism[1][1],(uint8_t*)publickeyhashrmd160_endomorphism[1][2],(uint8_t*)publickeyhashrmd160_endomorphism[1][3]);
+
+										secp->GetHash160_fromX(P2PKH,0x02,&endomorphism_beta[(j*4)].x,&endomorphism_beta[(j*4)+1].x,&endomorphism_beta[(j*4)+2].x,&endomorphism_beta[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[2][0],(uint8_t*)publickeyhashrmd160_endomorphism[2][1],(uint8_t*)publickeyhashrmd160_endomorphism[2][2],(uint8_t*)publickeyhashrmd160_endomorphism[2][3]);
+										secp->GetHash160_fromX(P2PKH,0x03,&endomorphism_beta[(j*4)].x,&endomorphism_beta[(j*4)+1].x,&endomorphism_beta[(j*4)+2].x,&endomorphism_beta[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[3][0],(uint8_t*)publickeyhashrmd160_endomorphism[3][1],(uint8_t*)publickeyhashrmd160_endomorphism[3][2],(uint8_t*)publickeyhashrmd160_endomorphism[3][3]);
+
+										secp->GetHash160_fromX(P2PKH,0x02,&endomorphism_beta2[(j*4)].x,&endomorphism_beta2[(j*4)+1].x,&endomorphism_beta2[(j*4)+2].x,&endomorphism_beta2[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[4][0],(uint8_t*)publickeyhashrmd160_endomorphism[4][1],(uint8_t*)publickeyhashrmd160_endomorphism[4][2],(uint8_t*)publickeyhashrmd160_endomorphism[4][3]);
+										secp->GetHash160_fromX(P2PKH,0x03,&endomorphism_beta2[(j*4)].x,&endomorphism_beta2[(j*4)+1].x,&endomorphism_beta2[(j*4)+2].x,&endomorphism_beta2[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[5][0],(uint8_t*)publickeyhashrmd160_endomorphism[5][1],(uint8_t*)publickeyhashrmd160_endomorphism[5][2],(uint8_t*)publickeyhashrmd160_endomorphism[5][3]);
+									}
+									else	{
+										secp->GetHash160_fromX(P2PKH,0x02,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[0][0],(uint8_t*)publickeyhashrmd160_endomorphism[0][1],(uint8_t*)publickeyhashrmd160_endomorphism[0][2],(uint8_t*)publickeyhashrmd160_endomorphism[0][3]);
+										secp->GetHash160_fromX(P2PKH,0x03,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[1][0],(uint8_t*)publickeyhashrmd160_endomorphism[1][1],(uint8_t*)publickeyhashrmd160_endomorphism[1][2],(uint8_t*)publickeyhashrmd160_endomorphism[1][3]);
+									}
+									
+								}
+								if(do_uncompress){
+									if(loc_endo)	{
+										for(l = 0; l < 4; l++)	{
+											endomorphism_negeted_point[l] = secp->Negation(pts[(j*4)+l]);
+										}
+										secp->GetHash160(P2PKH,false, pts[(j*4)], pts[(j*4)+1], pts[(j*4)+2], pts[(j*4)+3],(uint8_t*)publickeyhashrmd160_endomorphism[6][0],(uint8_t*)publickeyhashrmd160_endomorphism[6][1],(uint8_t*)publickeyhashrmd160_endomorphism[6][2],(uint8_t*)publickeyhashrmd160_endomorphism[6][3]);
+										secp->GetHash160(P2PKH,false,endomorphism_negeted_point[0] ,endomorphism_negeted_point[1],endomorphism_negeted_point[2],endomorphism_negeted_point[3],(uint8_t*)publickeyhashrmd160_endomorphism[7][0],(uint8_t*)publickeyhashrmd160_endomorphism[7][1],(uint8_t*)publickeyhashrmd160_endomorphism[7][2],(uint8_t*)publickeyhashrmd160_endomorphism[7][3]);
+										for(l = 0; l < 4; l++)	{
+											endomorphism_negeted_point[l] = secp->Negation(endomorphism_beta[(j*4)+l]);
+										}
+										secp->GetHash160(P2PKH,false,endomorphism_beta[(j*4)],  endomorphism_beta[(j*4)+1], endomorphism_beta[(j*4)+2], endomorphism_beta[(j*4)+3] ,(uint8_t*)publickeyhashrmd160_endomorphism[8][0],(uint8_t*)publickeyhashrmd160_endomorphism[8][1],(uint8_t*)publickeyhashrmd160_endomorphism[8][2],(uint8_t*)publickeyhashrmd160_endomorphism[8][3]);
+										secp->GetHash160(P2PKH,false,endomorphism_negeted_point[0],endomorphism_negeted_point[1],endomorphism_negeted_point[2],endomorphism_negeted_point[3],(uint8_t*)publickeyhashrmd160_endomorphism[9][0],(uint8_t*)publickeyhashrmd160_endomorphism[9][1],(uint8_t*)publickeyhashrmd160_endomorphism[9][2],(uint8_t*)publickeyhashrmd160_endomorphism[9][3]);
+
+										for(l = 0; l < 4; l++)	{
+											endomorphism_negeted_point[l] = secp->Negation(endomorphism_beta2[(j*4)+l]);
+										}
+										secp->GetHash160(P2PKH,false, endomorphism_beta2[(j*4)],  endomorphism_beta2[(j*4)+1] ,  endomorphism_beta2[(j*4)+2] ,  endomorphism_beta2[(j*4)+3] ,(uint8_t*)publickeyhashrmd160_endomorphism[10][0],(uint8_t*)publickeyhashrmd160_endomorphism[10][1],(uint8_t*)publickeyhashrmd160_endomorphism[10][2],(uint8_t*)publickeyhashrmd160_endomorphism[10][3]);
+										secp->GetHash160(P2PKH,false, endomorphism_negeted_point[0], endomorphism_negeted_point[1],   endomorphism_negeted_point[2],endomorphism_negeted_point[3],(uint8_t*)publickeyhashrmd160_endomorphism[11][0],(uint8_t*)publickeyhashrmd160_endomorphism[11][1],(uint8_t*)publickeyhashrmd160_endomorphism[11][2],(uint8_t*)publickeyhashrmd160_endomorphism[11][3]);
+
+									}
+									else	{
+										secp->GetHash160(P2PKH,false,pts[(j*4)],pts[(j*4)+1],pts[(j*4)+2],pts[(j*4)+3],(uint8_t*)publickeyhashrmd160_uncompress[0],(uint8_t*)publickeyhashrmd160_uncompress[1],(uint8_t*)publickeyhashrmd160_uncompress[2],(uint8_t*)publickeyhashrmd160_uncompress[3]);
+										
+									}
+								}
+							}								
+							else if(loc_is_eth){
+								if(loc_endo)	{
+									for(k = 0; k < 4;k++)	{
+										endomorphism_negeted_point[k] = secp->Negation(pts[(j*4)+k]);
+										generate_binaddress_eth(pts[(4*j)+k],(uint8_t*)publickeyhashrmd160_endomorphism[0][k]);
+										generate_binaddress_eth(endomorphism_negeted_point[k],(uint8_t*)publickeyhashrmd160_endomorphism[1][k]);
+										endomorphism_negeted_point[k] = secp->Negation(endomorphism_beta[(j*4)+k]);
+										generate_binaddress_eth(endomorphism_beta[(4*j)+k],(uint8_t*)publickeyhashrmd160_endomorphism[2][k]);
+										generate_binaddress_eth(endomorphism_negeted_point[k],(uint8_t*)publickeyhashrmd160_endomorphism[3][k]);
+										endomorphism_negeted_point[k] = secp->Negation(endomorphism_beta2[(j*4)+k]);
+										generate_binaddress_eth(endomorphism_beta2[(4*j)+k],(uint8_t*)publickeyhashrmd160_endomorphism[4][k]);
+										generate_binaddress_eth(endomorphism_negeted_point[k],(uint8_t*)publickeyhashrmd160_endomorphism[5][k]);
+									}
+								}
+								else	{
+									for(k = 0; k < 4;k++)	{
+										generate_binaddress_eth(pts[(4*j)+k],(uint8_t*)publickeyhashrmd160_uncompress[k]);
+									}
+								}
+								
+							}
+						break;
+					}
+
+					/* ── Opt 1: Check imediato após compute, mesmo slot j ── */
+					switch(loc_mode)	{
+						case MODE_ADDRESS:
+							if(loc_is_btc) {
+								
+								for(k = 0; k < 4;k++)	{
+									if(do_compress){
+										if(loc_endo)	{
+											for(l = 0;l < 6; l++)	{
+												r = cuckoo_check(&cuckoo,publickeyhashrmd160_endomorphism[l][k],loc_maxlen);
+												if(r) {
+													r = searchbinary(addressTable,publickeyhashrmd160_endomorphism[l][k],N);
+													if(r) {
+														keyfound.SetInt32(k);
+														keyfound.Mult(&stride);
+														keyfound.Add(&key_mpz);
+														publickey = secp->ComputePublicKey(&keyfound);
+														switch(l)	{
+															case 0:	//Original point, prefix 02
+																if(publickey.y.IsOdd())	{	//if the current publickey is odd that means, we need to negate the keyfound to get the correct key
+																	keyfound.Neg();
+																	keyfound.Add(&secp->order);
+																}
+																// else we dont need to chage the current keyfound because it already have prefix 02
+															break;
+															case 1:	//Original point, prefix 03
+																if(publickey.y.IsEven())	{	//if the current publickey is even that means, we need to negate the keyfound to get the correct key
+																	keyfound.Neg();
+																	keyfound.Add(&secp->order);
+																}
+																// else we dont need to chage the current keyfound because it already have prefix 03
+															break;
+															case 2:	//Beta point, prefix 02
+																keyfound.ModMulK1order(&lambda);
+																if(publickey.y.IsOdd())	{	//if the current publickey is odd that means, we need to negate the keyfound to get the correct key
+																	keyfound.Neg();
+																	keyfound.Add(&secp->order);
+																}
+																// else we dont need to chage the current keyfound because it already have prefix 02
+															break;
+															case 3:	//Beta point, prefix 03											
+																keyfound.ModMulK1order(&lambda);
+																if(publickey.y.IsEven())	{	//if the current publickey is even that means, we need to negate the keyfound to get the correct key
+																	keyfound.Neg();
+																	keyfound.Add(&secp->order);
+																}
+																// else we dont need to chage the current keyfound because it already have prefix 02
+															break;
+															case 4:	//Beta^2 point, prefix 02
+																keyfound.ModMulK1order(&lambda2);
+																if(publickey.y.IsOdd())	{	//if the current publickey is odd that means, we need to negate the keyfound to get the correct key
+																	keyfound.Neg();
+																	keyfound.Add(&secp->order);
+																}
+																// else we dont need to chage the current keyfound because it already have prefix 02
+															break;
+															case 5:	//Beta^2 point, prefix 03
+																keyfound.ModMulK1order(&lambda2);
+																if(publickey.y.IsEven())	{	//if the current publickey is even that means, we need to negate the keyfound to get the correct key
+																	keyfound.Neg();
+																	keyfound.Add(&secp->order);
+																}
+																// else we dont need to chage the current keyfound because it already have prefix 02
+															break;
+														}
+														writekey(true,&keyfound);
+													}
+												}
+											}
+										}
+										else	{
+											for(l = 0;l < 2; l++)	{
+												r = cuckoo_check(&cuckoo,publickeyhashrmd160_endomorphism[l][k],loc_maxlen);
+												if(r) {
+													r = searchbinary(addressTable,publickeyhashrmd160_endomorphism[l][k],N);
+													if(r) {
+														keyfound.SetInt32(k);
+														keyfound.Mult(&stride);
+														keyfound.Add(&key_mpz);
+														
+														publickey = secp->ComputePublicKey(&keyfound);
+														secp->GetHash160(P2PKH,true,publickey,(uint8_t*)publickeyhashrmd160);
+														if(memcmp(publickeyhashrmd160_endomorphism[l][k],publickeyhashrmd160,20) != 0)	{
+															keyfound.Neg();
+															keyfound.Add(&secp->order);
+														}
+														writekey(true,&keyfound);
+													}
+												}
+											}
+										}
+									}
+
+									if(do_uncompress)	{
+										if(loc_endo)	{
+											for(l = 6;l < 12; l++)	{	//We check the array from 6 to 12(excluded) because we save the uncompressed information there
+												r = cuckoo_check(&cuckoo,publickeyhashrmd160_endomorphism[l][k],loc_maxlen);	//Check in Cuckoo filter
+												if(r) {
+													r = searchbinary(addressTable,publickeyhashrmd160_endomorphism[l][k],N);		//Check in Array using Binary search
+													if(r) {
+														keyfound.SetInt32(k);
+														keyfound.Mult(&stride);
+														keyfound.Add(&key_mpz);
+														switch(l)	{
+															case 6:
+															case 7:
+																publickey = secp->ComputePublicKey(&keyfound);
+																secp->GetHash160(P2PKH,false,publickey,(uint8_t*)publickeyhashrmd160_uncompress[0]);
+																if(memcmp(publickeyhashrmd160_endomorphism[l][k],publickeyhashrmd160_uncompress[0],20) != 0){
+																	keyfound.Neg();
+																	keyfound.Add(&secp->order);
+																}
+															break;
+															case 8:
+															case 9:
+																keyfound.ModMulK1order(&lambda);
+																publickey = secp->ComputePublicKey(&keyfound);
+																secp->GetHash160(P2PKH,false,publickey,(uint8_t*)publickeyhashrmd160_uncompress[0]);
+																if(memcmp(publickeyhashrmd160_endomorphism[l][k],publickeyhashrmd160_uncompress[0],20) != 0){
+																	keyfound.Neg();
+																	keyfound.Add(&secp->order);
+																}
+															break;
+															case 10:
+															case 11:
+																keyfound.ModMulK1order(&lambda2);
+																publickey = secp->ComputePublicKey(&keyfound);
+																secp->GetHash160(P2PKH,false,publickey,(uint8_t*)publickeyhashrmd160_uncompress[0]);
+																if(memcmp(publickeyhashrmd160_endomorphism[l][k],publickeyhashrmd160_uncompress[0],20) != 0){
+																	keyfound.Neg();
+																	keyfound.Add(&secp->order);
+																}
+															break;
+														}
+														writekey(false,&keyfound);
+													}
+												}
+											}
+										}
+										else	{
+											r = cuckoo_check(&cuckoo,publickeyhashrmd160_uncompress[k],loc_maxlen);
+											if(r) {
+												r = searchbinary(addressTable,publickeyhashrmd160_uncompress[k],N);
+												if(r) {
+													keyfound.SetInt32(k);
+													keyfound.Mult(&stride);
+													keyfound.Add(&key_mpz);
+													writekey(false,&keyfound);
+												}
+											}
+										}
+									}
+								}
+							}
+							else if(loc_is_eth) {
+								if(loc_endo)	{
+									for(k = 0; k < 4;k++)	{
+										for(l = 0;l < 6; l++)	{
+											r = cuckoo_check(&cuckoo,publickeyhashrmd160_endomorphism[l][k],loc_maxlen);
+											if(r) {
+												r = searchbinary(addressTable,publickeyhashrmd160_endomorphism[l][k],N);
+												if(r) {												
+													keyfound.SetInt32(k);
+													keyfound.Mult(&stride);
+													keyfound.Add(&key_mpz);
+													switch(l)	{
+														case 0:
+														case 1:
+															publickey = secp->ComputePublicKey(&keyfound);
+															generate_binaddress_eth(publickey,(uint8_t*)publickeyhashrmd160_uncompress[0]);
+															if(memcmp(publickeyhashrmd160_endomorphism[l][k],publickeyhashrmd160_uncompress[0],20) != 0){
+																keyfound.Neg();
+																keyfound.Add(&secp->order);
+															}
+														break;
+														case 2:
+														case 3:
+															keyfound.ModMulK1order(&lambda);
+															publickey = secp->ComputePublicKey(&keyfound);
+															generate_binaddress_eth(publickey,(uint8_t*)publickeyhashrmd160_uncompress[0]);
+															if(memcmp(publickeyhashrmd160_endomorphism[l][k],publickeyhashrmd160_uncompress[0],20) != 0){
+																keyfound.Neg();
+																keyfound.Add(&secp->order);
+															}
+														break;
+														case 4:
+														case 5:
+															keyfound.ModMulK1order(&lambda2);
+															publickey = secp->ComputePublicKey(&keyfound);
+															generate_binaddress_eth(publickey,(uint8_t*)publickeyhashrmd160_uncompress[0]);
+															if(memcmp(publickeyhashrmd160_endomorphism[l][k],publickeyhashrmd160_uncompress[0],20) != 0){
+																keyfound.Neg();
+																keyfound.Add(&secp->order);
+															}
+														break;
+													}
+													writekeyeth(&keyfound);											
+												}
+											}
+										}
+									}
+								}
+								else	{
+									for(k = 0; k < 4;k++)	{
+										r = cuckoo_check(&cuckoo,publickeyhashrmd160_uncompress[k],loc_maxlen);
+										if(r) {
+											r = searchbinary(addressTable,publickeyhashrmd160_uncompress[k],N);
+											if(r) {
+												keyfound.SetInt32(k);
+												keyfound.Mult(&stride);
+												keyfound.Add(&key_mpz);
+												writekeyeth(&keyfound);
+											}
+										}
+									}
+								}
+							}
+						break;
+					}
+					count+=4;
+					temp_stride.SetInt32(4);
+					temp_stride.Mult(&stride);
+					key_mpz.Add(&temp_stride);
+				}
+				/*
+				if(FLAGDEBUG) {
+					printf("\n[D] thread_process %i\n",__LINE__ -1 );
+					fflush(stdout);
+				}
+				*/
+
+				steps_add_relaxed(thread_number, 1);
+
+				// Next start point (startP + GRP_SIZE*G)
+				pp = startP;
+				dy.ModSub(&_2Gn.y,&pp.y);
+
+				_s.ModMulK1(&dy,&dx[i + 1]);
+				_p.ModSquareK1(&_s);
+
+				pp.x.ModNeg();
+				pp.x.ModAdd(&_p);
+				pp.x.ModSub(&_2Gn.x);
+				
+				//The Y value for the next start point always need to be calculated
+				pp.y.ModSub(&_2Gn.x,&pp.x);
+				pp.y.ModMulK1(&_s);
+				pp.y.ModSub(&_2Gn.y);
+				startP = pp;
+			}while(count < N_SEQUENTIAL_MAX && continue_flag && !SHOULD_SAVE);
+		}
+	if(continue_flag) {
+			Int step;
+			step.SetInt32(N_SEQUENTIAL_MAX);
+			partition_cursors[thread_number].Add(&step);
+		}
+	} while(continue_flag && !SHOULD_SAVE);
+	delete grp;
+	ends_store_release(thread_number, 1);
+	return NULL;
 }
