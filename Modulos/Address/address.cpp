@@ -2539,6 +2539,7 @@ int main(int argc, char **argv)	{
 							thread_diff.Sub(&partition_starts[i]);
 							range_progress.Add(&thread_diff);
 						}
+						total.Set(&range_progress);
 					} else if (FLAGMODE == MODE_BSGS) {
 						range_progress.Set(&BSGS_CURRENT);
 						range_progress.Sub(&n_range_start_original);
@@ -6499,6 +6500,20 @@ void *thread_process_partitioned(void *vargp)	{
 		if (!key_mpz.IsLower(&partition_end_local)) {
 			continue_flag = 0;
 		}
+		
+		uint64_t current_batch_max = N_SEQUENTIAL_MAX;
+		Int diff;
+		diff.Set(&partition_end_local);
+		diff.Sub(&key_mpz);
+		Int aux;
+		aux.SetInt64(N_SEQUENTIAL_MAX);
+		if (diff.IsLower(&aux)) {
+			current_batch_max = diff.GetInt64();
+		}
+		if (current_batch_max < CPU_GRP_SIZE) {
+			current_batch_max = CPU_GRP_SIZE; // avoid zero loops 
+		}
+
 		if (SHOULD_SAVE) {
 			continue_flag = 0;
 		}
@@ -7018,11 +7033,11 @@ void *thread_process_partitioned(void *vargp)	{
 				pp.y.ModMulK1(&_s);
 				pp.y.ModSub(&_2Gn.y);
 				startP = pp;
-			}while(count < N_SEQUENTIAL_MAX && continue_flag && !SHOULD_SAVE);
+			}while(count < current_batch_max && continue_flag && !SHOULD_SAVE);
 		}
 	if(continue_flag) {
 			Int step;
-			step.SetInt32(N_SEQUENTIAL_MAX);
+			step.SetInt64(current_batch_max);
 			partition_cursors[thread_number].Add(&step);
 		}
 	} while(continue_flag && !SHOULD_SAVE);
