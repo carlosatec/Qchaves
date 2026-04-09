@@ -132,8 +132,8 @@ inline double compute_safe_ram_gb(const HardwareProfile& hw, const char* profile
         available_factor = 0.45;
         total_factor = 0.35;
     } else if (equals_ignore_case(profile_name, "max")) {
-        available_factor = 0.75;
-        total_factor = 0.65;
+        available_factor = 0.85;
+        total_factor = 0.80;
     }
     if (hw.is_wsl) {
         available_factor -= 0.10;

@@ -308,7 +308,7 @@ BsgsAutoConfig compute_bsgs_auto_config(const HardwareProfile& hw, const std::st
     double safe_ram = compute_safe_ram_gb(hw, profile_mode.c_str());
     cfg.ram_gb = safe_ram;
 
-    double bytes_per_entry = 40.0;
+    double bytes_per_entry = 4.0;
     uint64_t max_entries = static_cast<uint64_t>((safe_ram * 1073741824.0) / bytes_per_entry);
 
     int threads;
@@ -332,15 +332,9 @@ BsgsAutoConfig compute_bsgs_auto_config(const HardwareProfile& hw, const std::st
         }
     } else if (equals_ignore_case(profile_mode.c_str(), "max")) {
         threads = std::max(1, hw.logical_threads);
-        if (hw.total_ram_gb >= 64.0) {
-            n = max_entries > 134217728 ? 134217728 : max_entries / 2;
-        } else if (hw.total_ram_gb >= 32.0) {
-            n = max_entries > 67108864 ? 67108864 : max_entries / 2;
-        } else if (hw.total_ram_gb >= 16.0) {
-            n = max_entries > 33554432 ? 33554432 : max_entries / 2;
-        } else {
-            n = max_entries > 16777216 ? 16777216 : max_entries / 2;
-        }
+        bytes_per_entry = 3.5;
+        max_entries = static_cast<uint64_t>((safe_ram * 1073741824.0) / bytes_per_entry);
+        n = max_entries;
         k = 16;
     } else {
         threads = hw.logical_threads > 4 ? hw.logical_threads - 1 : hw.logical_threads;
@@ -357,8 +351,8 @@ BsgsAutoConfig compute_bsgs_auto_config(const HardwareProfile& hw, const std::st
     }
 
     cfg.threads = std::max(1, std::min(threads, 256));
-    uint64_t max_n = max_entries > 0 ? max_entries : static_cast<uint64_t>(1048576);
-    cfg.n = std::max(static_cast<uint64_t>(1048576), std::min(n, max_n));
+    uint64_t aligned_n = (std::max(static_cast<uint64_t>(1048576), std::min(n, max_entries)) / 1024) * 1024;
+    cfg.n = aligned_n;
     cfg.k = std::max(static_cast<uint64_t>(1), std::min(k, static_cast<uint64_t>(64)));
 
     return cfg;
@@ -468,6 +462,7 @@ uint32_t bsgs_point_number;
 
 const char *str_limits_prefixs[7] = {"Mkeys/s","Gkeys/s","Tkeys/s","Pkeys/s","Ekeys/s","Zkeys/s","Ykeys/s"};
 const char *str_limits_prefixs_total[11] = {"","K","M","B","T","Q","Qi","Sx","Sp","Oc","N"};
+const char *str_limits_prefixs_rate[11] = {"","K","M","G","T","P","E","Z","Y","R","Q"};
 const char *str_limits[7] = {"1000000","1000000000","1000000000000","1000000000000000","1000000000000000000","1000000000000000000000","1000000000000000000000000"};
 Int int_limits[7];
 
@@ -510,6 +505,10 @@ Int n_range_start;
 Int n_range_end;
 Int n_range_diff;
 Int n_range_aux;
+Int n_range_end_original;
+Int n_range_start_original;
+Int n_range_forward_covered;
+Int checkpoint_total_offset;
 
 Int lambda,lambda2,beta,beta2;
 
@@ -584,7 +583,7 @@ static inline bool env_falsy(const char *value) {
         || equals_ignore_case(value, "off");
 }
 
-void snapshot_bsgs_progress(Int *range_start_snapshot, Int *range_end_snapshot, Int *current_snapshot, int *mode_snapshot) {
+void snapshot_bsgs_progress(Int *range_start_snapshot, Int *range_end_snapshot, Int *current_snapshot, Int *original_start_snapshot, Int *forward_covered_snapshot, int *mode_snapshot) {
 #if defined(_WIN64) && !defined(__CYGWIN__)
     WaitForSingleObject(bsgs_thread, INFINITE);
 #else
@@ -593,6 +592,8 @@ void snapshot_bsgs_progress(Int *range_start_snapshot, Int *range_end_snapshot, 
     range_start_snapshot->Set(&n_range_start);
     range_end_snapshot->Set(&n_range_end);
     current_snapshot->Set(&BSGS_CURRENT);
+    original_start_snapshot->Set(&n_range_start_original);
+    forward_covered_snapshot->Set(&n_range_forward_covered);
     *mode_snapshot = FLAGBSGSMODE;
 #if defined(_WIN64) && !defined(__CYGWIN__)
     ReleaseMutex(bsgs_thread);
@@ -662,13 +663,18 @@ void save_checkpoint_bsgs(int bits) {
         Int range_start_snapshot;
         Int range_end_snapshot;
         Int current_snapshot;
+        Int original_start_snapshot;
+        Int forward_covered_snapshot;
         int mode_snapshot = 0;
-        snapshot_bsgs_progress(&range_start_snapshot, &range_end_snapshot, &current_snapshot, &mode_snapshot);
+        snapshot_bsgs_progress(&range_start_snapshot, &range_end_snapshot, &current_snapshot, &original_start_snapshot, &forward_covered_snapshot, &mode_snapshot);
         char *range_start_hex = range_start_snapshot.GetBase16();
         char *range_end_hex = range_end_snapshot.GetBase16();
         char *current_hex = current_snapshot.GetBase16();
+        char *original_start_hex = original_start_snapshot.GetBase16();
+        char *forward_covered_hex = forward_covered_snapshot.GetBase16();
         
-        fprintf(f, "BSGS3\n%d\n%d\n%s\n%s\n%s\n", bits, mode_snapshot, range_start_hex, range_end_hex, current_hex);
+        // BSGS4 format: bits, mode, original_start, range_start, range_end, current, forward_covered
+        fprintf(f, "BSGS4\n%d\n%d\n%s\n%s\n%s\n%s\n%s\n", bits, mode_snapshot, original_start_hex, range_start_hex, range_end_hex, current_hex, forward_covered_hex);
         
         if (bsgs_point_number > 0 && bsgs_found != NULL) {
             fwrite(&bsgs_point_number, sizeof(uint32_t), 1, f);
@@ -682,6 +688,8 @@ void save_checkpoint_bsgs(int bits) {
         free(range_start_hex);
         free(range_end_hex);
         free(current_hex);
+        free(original_start_hex);
+        free(forward_covered_hex);
     }
 }
 
@@ -694,10 +702,40 @@ bool load_checkpoint_bsgs(int bits) {
         char range_start_hex[128] = {0};
         char range_end_hex[128] = {0};
         char current_hex[128] = {0};
+        char original_start_hex[128] = {0};
+        char forward_covered_hex[128] = {0};
         int fbits = 0;
         int mode_snapshot = 0;
         if (fscanf(f, "%15s", magic) == 1) {
-            if (strcmp(magic, "BSGS3") == 0) {
+            if (strcmp(magic, "BSGS4") == 0) {
+                if (fscanf(f, "%d\n%d\n%127s\n%127s\n%127s\n%127s\n%127s\n", &fbits, &mode_snapshot, original_start_hex, range_start_hex, range_end_hex, current_hex, forward_covered_hex) == 7 && fbits == bits) {
+                    if (should_resume_bsgs_checkpoint(filename)) {
+                        n_range_start_original.SetBase16(original_start_hex);
+                        n_range_start.SetBase16(range_start_hex);
+                        n_range_end.SetBase16(range_end_hex);
+                        BSGS_CURRENT.SetBase16(current_hex);
+                        n_range_forward_covered.SetBase16(forward_covered_hex);
+                        // Recalculate diff based on original range
+                        n_range_diff.Set(&n_range_end_original);
+                        n_range_diff.Sub(&n_range_start_original);
+                        FLAGBSGSMODE = mode_snapshot;
+                        FLAGRANDOM = (mode_snapshot == 3) ? 1 : 0;
+                        printf("[+] Retomando BSGS_CURRENT: 0x%s (mode: %s)\n", current_hex, bsgs_modes[FLAGBSGSMODE]);
+                        printf("[+] Início original: 0x%s\n", original_start_hex);
+                        
+                        uint32_t saved_point_count = 0;
+                        if (fread(&saved_point_count, sizeof(uint32_t), 1, f) == 1 && saved_point_count > 0) {
+                            if (bsgs_found != NULL && saved_point_count == bsgs_point_number) {
+                                fread(bsgs_found, sizeof(int), saved_point_count, f);
+                                printf("[+] Restaurado bsgs_found para %u alvos\n", saved_point_count);
+                            }
+                        }
+                        
+                        fclose(f);
+                        return true;
+                    }
+                }
+            } else if (strcmp(magic, "BSGS3") == 0) {
                 if (fscanf(f, "%d\n%d\n%127s\n%127s\n%127s\n", &fbits, &mode_snapshot, range_start_hex, range_end_hex, current_hex) == 5 && fbits == bits) {
                     if (should_resume_bsgs_checkpoint(filename)) {
                         n_range_start.SetBase16(range_start_hex);
@@ -705,7 +743,7 @@ bool load_checkpoint_bsgs(int bits) {
                         BSGS_CURRENT.SetBase16(current_hex);
                         FLAGBSGSMODE = mode_snapshot;
                         FLAGRANDOM = (mode_snapshot == 3) ? 1 : 0;
-                        printf("[+] Retomando BSGS_CURRENT: 0x%s (mode: %s)\n", current_hex, bsgs_modes[FLAGBSGSMODE]);
+                        printf("[+] Retomando BSGS_CURRENT: 0x%s (mode: %s, formato legado)\n", current_hex, bsgs_modes[FLAGBSGSMODE]);
                         
                         uint32_t saved_point_count = 0;
                         if (fread(&saved_point_count, sizeof(uint32_t), 1, f) == 1 && saved_point_count > 0) {
@@ -1121,6 +1159,9 @@ int main(int argc, char **argv)	{
 				}
 				n_range_diff.Set(&n_range_end);
 				n_range_diff.Sub(&n_range_start);
+				n_range_end_original.Set(&n_range_end);
+				n_range_start_original.Set(&n_range_start);
+				checkpoint_total_offset.SetInt32(0);
 			}
 			else	{
 				fprintf(stderr,"[E] Start and End range can't be great than N\nFallback to random mode!\n");
@@ -1146,6 +1187,10 @@ int main(int argc, char **argv)	{
 				n_range_end.SetBase16(bit_range_str_max);
 				n_range_diff.Set(&n_range_end);
 				n_range_diff.Sub(&n_range_start);
+				n_range_end_original.Set(&n_range_end);
+				n_range_start_original.Set(&n_range_start);
+				n_range_forward_covered.SetInt32(0);
+				checkpoint_total_offset.SetInt32(0);
 			}
 			else	{
 				if(FLAGRANGE == 0)	{
@@ -1322,7 +1367,10 @@ int main(int argc, char **argv)	{
 			BSGS_N.SetInt64((uint64_t)0x100000000000);
 		}
 
-		if(BSGS_N.HasSqrt())	{	//If the root is exact
+		if(FLAG_AUTO_PROFILE) {
+			BSGS_M.SetInt64(bsgs_m);
+		}
+		else if(BSGS_N.HasSqrt())	{	//If the root is exact
 			BSGS_M.Set(&BSGS_N);
 			BSGS_M.ModSqrt();
 		}
@@ -1349,6 +1397,10 @@ int main(int argc, char **argv)	{
 
 				n_range_diff.Set(&n_range_end);
 				n_range_diff.Sub(&n_range_start);
+				n_range_end_original.Set(&n_range_end);
+				n_range_start_original.Set(&n_range_start);
+				n_range_forward_covered.SetInt32(0);
+				checkpoint_total_offset.SetInt32(0);
 				printf("[+] Bit Range %i\n",bitrange);
 				printf("[+] -- from : 0x%s\n",bit_range_str_min);
 				printf("[+] -- to   : 0x%s\n",bit_range_str_max);
@@ -1371,7 +1423,7 @@ int main(int argc, char **argv)	{
         // --- CHECKPOINT LOAD ---
         if(FLAGBITRANGE) {
             load_checkpoint_bsgs(bitrange);
-            BSGS_CURRENT.Set(&n_range_start);
+            // Note: load_checkpoint_bsgs already restores BSGS_CURRENT correctly
         }
         // -----------------------
 
@@ -2429,8 +2481,8 @@ int main(int argc, char **argv)	{
 					range_total.Set(&n_range_diff);
 					
 					Int range_progress;
-					range_progress.Set(&n_range_start);
-					range_progress.Sub(&n_range_aux);
+					range_progress.Set(&BSGS_CURRENT);
+					range_progress.Sub(&n_range_start_original);
 					
 					Int percent;
 					percent.Set(&range_progress);
@@ -2443,7 +2495,7 @@ int main(int argc, char **argv)	{
 					
 					Int remaining_keys;
 					remaining_keys.Set(&n_range_end);
-					remaining_keys.Sub(&n_range_start);
+					remaining_keys.Sub(&BSGS_CURRENT);
 					
 					Int eta_seconds;
 					if (!rate_per_sec.IsZero()) {
@@ -2458,41 +2510,149 @@ int main(int argc, char **argv)	{
 					if (pct < 0) pct = 0;
 					if (pct > 100) pct = 100;
 					
-					int bar_width = 30;
-					int filled = (pct * bar_width) / 100;
-					int empty = bar_width - filled;
-					
 					char bar[64] = {0};
-					int pos = 0;
-					bar[pos++] = '[';
-					for (int i = 0; i < filled; i++) bar[pos++] = '#';
-					for (int i = 0; i < empty; i++) bar[pos++] = '-';
-					bar[pos++] = ']';
-					bar[pos] = '\0';
+					int bar_width = 30;
+					int filled, empty;
 					
-					// Formatar total de chaves com prefixo (M, G, T, etc)
-					Int div_total;
-					int total_index = 0;
-					for (int i = 0; i < 11; i++) {
-						if (total.IsLower(&int_limits[i])) {
-							total_index = (i > 0) ? i - 1 : 0;
-							break;
+					if (FLAGBSGSMODE == 2) { // modo both
+						Int forward_covered;
+						forward_covered.Set(&n_range_forward_covered);
+						
+						Int backward_covered;
+						backward_covered.Set(&n_range_end_original);
+						backward_covered.Sub(&n_range_end);
+						
+						Int total_covered;
+						total_covered.Set(&forward_covered);
+						total_covered.Add(&backward_covered);
+						
+						Int total_percent;
+						total_percent.Set(&total_covered);
+						total_percent.Mult(100);
+						total_percent.Div(&range_total);
+						
+						int pct_total = total_percent.GetInt32();
+						if (pct_total < 0) pct_total = 0;
+						if (pct_total > 100) pct_total = 100;
+						
+						Int forward_percent;
+						forward_percent.Set(&forward_covered);
+						forward_percent.Mult(100);
+						forward_percent.Div(&range_total);
+						int pct_forward = forward_percent.GetInt32();
+						if (pct_forward < 0) pct_forward = 0;
+						if (pct_forward > 100) pct_forward = 100;
+						
+						Int backward_percent;
+						backward_percent.Set(&backward_covered);
+						backward_percent.Mult(100);
+						backward_percent.Div(&range_total);
+						int pct_backward = backward_percent.GetInt32();
+						if (pct_backward < 0) pct_backward = 0;
+						if (pct_backward > 100) pct_backward = 100;
+						
+						Int remaining_total;
+						remaining_total.Set(&n_range_end_original);
+						remaining_total.Sub(&n_range_start_original);
+						remaining_total.Sub(&total_covered);
+						
+						Int eta_both_seconds;
+						if (!rate_per_sec.IsZero()) {
+							eta_both_seconds.Set(&remaining_total);
+							eta_both_seconds.Div(&rate_per_sec);
 						}
-						if (i == 10) total_index = 10;
+						char* str_eta_both = eta_both_seconds.GetBase10();
+						
+						Int div_total_keys;
+						int total_keys_index = 0;
+						for (int i = 0; i < 11; i++) {
+							if (total.IsLower(&int_limits[i])) {
+								total_keys_index = (i > 0) ? i - 1 : 0;
+								break;
+							}
+							if (i == 10) total_keys_index = 10;
+						}
+						div_total_keys.Set(&total);
+						div_total_keys.Div(&int_limits[total_keys_index]);
+						char* str_total_keys_fmt = div_total_keys.GetBase10();
+						
+						Int div_rate_both;
+						int rate_both_index = 0;
+						for (int i = 0; i < 10; i++) {
+							if (pretotal.IsLower(&int_limits[i])) {
+								rate_both_index = (i > 0) ? i - 1 : 0;
+								break;
+							}
+							if (i == 9) rate_both_index = 9;
+						}
+						div_rate_both.Set(&pretotal);
+						div_rate_both.Div(&int_limits[rate_both_index]);
+						char* str_rate_both_fmt = div_rate_both.GetBase10();
+						
+						filled = (pct_total * bar_width) / 100;
+						empty = bar_width - filled;
+						int pos = 0;
+						bar[pos++] = '[';
+						for (int i = 0; i < filled; i++) bar[pos++] = '#';
+						for (int i = 0; i < empty; i++) bar[pos++] = '-';
+						bar[pos++] = ']';
+						bar[pos] = '\0';
+						
+						sprintf(buffer, "\r%s%3d%% | Fwd:%3d%% Bwd:%3d%% | Total Keys: %s %s | Rate: %s %s/s | ETA: %ss ", 
+							bar, pct_total, pct_forward, pct_backward, str_total_keys_fmt, str_limits_prefixs_total[total_keys_index], str_rate_both_fmt, str_limits_prefixs_rate[rate_both_index], str_eta_both);
+						
+						free(str_eta_both);
+						free(str_total_keys_fmt);
+						free(str_rate_both_fmt);
 					}
-					div_total.Set(&total);
-					div_total.Div(&int_limits[total_index]);
-					char* str_total_fmt = div_total.GetBase10();
-					
-					sprintf(buffer, "\r%s %3d%% | Keys: %s %s | Rate: %s/s | ETA: %ss ", 
-						bar, pct, str_total_fmt, str_limits_prefixs_total[total_index], str_pretotal, str_eta);
+					else {
+						filled = (pct * bar_width) / 100;
+						empty = bar_width - filled;
+						int pos = 0;
+						bar[pos++] = '[';
+						for (int i = 0; i < filled; i++) bar[pos++] = '#';
+						for (int i = 0; i < empty; i++) bar[pos++] = '-';
+						bar[pos++] = ']';
+						bar[pos] = '\0';
+						
+						Int div_total;
+						int total_index = 0;
+						for (int i = 0; i < 11; i++) {
+							if (total.IsLower(&int_limits[i])) {
+								total_index = (i > 0) ? i - 1 : 0;
+								break;
+							}
+							if (i == 10) total_index = 10;
+						}
+						div_total.Set(&total);
+						div_total.Div(&int_limits[total_index]);
+						char* str_total_fmt = div_total.GetBase10();
+						
+						Int div_rate;
+						int rate_index = 0;
+						for (int i = 0; i < 10; i++) {
+							if (pretotal.IsLower(&int_limits[i])) {
+								rate_index = (i > 0) ? i - 1 : 0;
+								break;
+							}
+							if (i == 9) rate_index = 9;
+						}
+						div_rate.Set(&pretotal);
+						div_rate.Div(&int_limits[rate_index]);
+						char* str_rate_fmt = div_rate.GetBase10();
+						
+						sprintf(buffer, "\r%s %3d%% | Keys: %s %s | Rate: %s %s/s | ETA: %ss ", 
+							bar, pct, str_total_fmt, str_limits_prefixs_total[total_index], str_rate_fmt, str_limits_prefixs_rate[rate_index], str_eta);
+						
+						free(str_total_fmt);
+						free(str_rate_fmt);
+					}
 					
 					printf("%s", buffer);
 					fflush(stdout);
 					
 					free(str_percent);
 					free(str_eta);
-					free(str_total_fmt);
 				}
 				else if (FLAGRANDOM) {
 					// Modo random: mostrar tempo decorrido
@@ -2515,11 +2675,25 @@ int main(int argc, char **argv)	{
 					div_total.Div(&int_limits[total_index]);
 					char* str_total_fmt = div_total.GetBase10();
 					
-					sprintf(buffer, "\r[Random] Keys: %s %s | Rate: %s/s | Time: %02d:%02d:%02d ", 
-						str_total_fmt, str_limits_prefixs_total[total_index], str_pretotal, hrs, mins, secs);
+					Int div_rate;
+					int rate_index = 0;
+					for (int i = 0; i < 10; i++) {
+						if (pretotal.IsLower(&int_limits[i])) {
+							rate_index = (i > 0) ? i - 1 : 0;
+							break;
+						}
+						if (i == 9) rate_index = 9;
+					}
+					div_rate.Set(&pretotal);
+					div_rate.Div(&int_limits[rate_index]);
+					char* str_rate_fmt = div_rate.GetBase10();
+					
+					sprintf(buffer, "\r[Random] Keys: %s %s | Rate: %s %s/s | Time: %02d:%02d:%02d ", 
+						str_total_fmt, str_limits_prefixs_total[total_index], str_rate_fmt, str_limits_prefixs_rate[rate_index], hrs, mins, secs);
 					printf("%s", buffer);
 					fflush(stdout);
 					free(str_total_fmt);
+					free(str_rate_fmt);
 				}
 				else {
 					printf("%s",buffer);
@@ -5122,6 +5296,7 @@ void *thread_process_bsgs_both(void *vargp)	{
 					base_key.Set(&BSGS_CURRENT);
 					//BSGS_N_double
 					BSGS_CURRENT.Add(&BSGS_N_double);
+					n_range_forward_covered.Add(&BSGS_N_double);
 					/*
 					BSGS_CURRENT.Add(&BSGS_N);
 					BSGS_CURRENT.Add(&BSGS_N);

@@ -151,6 +151,9 @@ std::array<TrapShard, TRAP_SHARDS> trap_shards;
 uint64_t TRAP_CAPACITY = 0;
 uint64_t TRAP_BYTES_ESTIMATE = 0;
 
+const char* str_limits_prefixs_total[] = {"", "K", "M", "B", "T", "Q", "Qi", "Sx", "Sp", "Oct", "No", "Dec"};
+const char* str_limits_prefixs_rate[] = {"", "K", "M", "G", "T", "P", "E", "Z", "Y", "R", "Q"};
+
 int N_THREADS = 1;
 int FLAG_BITRANGE = 0;
 uint64_t DP_MASK = 0xFFFFF00000000000ULL;
@@ -1973,9 +1976,26 @@ int main(int argc, char** argv) {
         const double trap_mem_gb = estimated_trap_memory_gb(traps);
         const double eta_seconds = estimated_seconds_to_capacity(traps, dur);
         const double eta_hours = seconds_to_hours(eta_seconds);
-        printf("STAT: %llu hops, %.2f hops/s, %llu traps, %.2f GB est, ETA %.2f h, %llu dps, %llu flush, T[j %.0fms c %.0fms t %.0fms]\r",
-               (unsigned long long)current_hops,
-               dur > 0.0 ? (double)current_hops / dur : 0.0,
+
+        double hops_per_sec = dur > 0.0 ? (double)current_hops / dur : 0.0;
+        
+        int rate_index = 0;
+        double scaled_rate = hops_per_sec;
+        while (scaled_rate >= 1000.0 && rate_index < 10) {
+            scaled_rate /= 1000.0;
+            rate_index++;
+        }
+
+        int total_index = 0;
+        double scaled_hops = (double)current_hops;
+        while (scaled_hops >= 1000.0 && total_index < 11) {
+            scaled_hops /= 1000.0;
+            total_index++;
+        }
+
+        printf("STAT: %.2f %s | Rate: %.2f %sH/s | Traps: %llu | RAM: %.2f GB | ETA: %.2f h | DPS: %llu | Flush: %llu | T: [j %.0fms c %.0fms t %.0fms]\r",
+               scaled_hops, str_limits_prefixs_total[total_index],
+               scaled_rate, str_limits_prefixs_rate[rate_index],
                (unsigned long long)traps,
                trap_mem_gb,
                eta_hours,
