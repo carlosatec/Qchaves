@@ -42,8 +42,10 @@ Busca chaves privadas comparando endereços gerados com uma lista de endereços-
 - `-f` - Arquivo com os endereços-alvo (formato: 1... ou pubkey hex)
 - `-b` - Bit range (ex: 66 = busca entre 2^65 e 2^66)
 - `-t` - Número de threads
-- `-R` - Modo de busca (sequential, backward, both, random, partitioned)
+- `-R` - Modo de busca (sequential, backward, both, random, partitioned, hybrid)
 - `-l` - Tipo de busca: compress, uncompress, both
+- `-k` - Fator K (no modo hybrid: multiplicador de tamanho do lote; no modo BSGS: fator de memória)
+- `-C` - Chunk Step (específico para modo hybrid: passo da permutação pseudo-aleatória)
 - `-A` - Auto-tuning (safe, balanced, max)
 
 **Modos de busca:**
@@ -52,6 +54,7 @@ Busca chaves privadas comparando endereços gerados com uma lista de endereços-
 - `-R both` - Metade das threads para cada lado (mais rápido)
 - `-R random` - Posições aleatórias (puzzles)
 - `-R partitioned` - Divide o intervalo total em sub-faixas contínuas, 1 por thread. Modélagem assíncrona (livre de perdas por Mutex), acelerando processadores com muito núcleos.
+- `-R hybrid` - Utiliza Fila de Trabalho Global (Dynamic Load Balancing) com randomização forte (SplitMix64). Chunks são distribuídos dinamicamente entre as threads, garantindo 100% de uso da CPU e dispersão máxima no espaço de busca sem colisões.
 
 
 **Exemplos:**
@@ -70,6 +73,21 @@ Busca chaves privadas comparando endereços gerados com uma lista de endereços-
 
 # Busca particionada de alta performance
 ./modo-address -f Puzzles/21.txt -b 21 -R partitioned -t 8
+
+# Busca Híbrida (Recomendado para Puzzles grandes: 66, 71, 72, etc)
+# Uso padrão (Equilibrado)
+./modo-address -f Puzzles/71.txt -b 71 -R hybrid -k 1024 -t 16
+
+# Alta performance (Lotes maiores via -k para maximizar hashes/s)
+./modo-address -f Puzzles/71.txt -b 71 -R hybrid -k 4096 -t 16
+
+# Dispersão agressiva (Lotes menores para "pular" mais pelo puzzle)
+./modo-address -f Puzzles/71.txt -b 71 -R hybrid -k 256 -t 16
+
+# Uso com passo customizado (Especificando o -C para variar o sorteio)
+# Se você sente que a busca em um determinado padrão linear ou com o step padrão não está dando sorte, você pode injetar um número grande (preferencialmente um número ímpar ou primo) para forçar um novo embaralhamento.
+#Geralmente usamos números hexadecimais grandes e estranhos (como 0x9e3779b97f4a7c15, que é baseado na Proporção Áurea) mas qualquer número grande funciona.
+./modo-address -f Puzzles/71.txt -b 71 -R hybrid -C 0x9e3779b97f4a7c15 -t 16
 
 # Auto-tuning (recomendado)
 ./modo-address -A balanced -f Puzzles/21.txt -b 21
