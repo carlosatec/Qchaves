@@ -434,8 +434,8 @@ uint64_t bsgs_aux;
 uint32_t bsgs_point_number;
 
 const char *str_limits_prefixs[7] = {"Mkeys/s","Gkeys/s","Tkeys/s","Pkeys/s","Ekeys/s","Zkeys/s","Ykeys/s"};
-const char *str_limits_prefixs_total[11] = {"","K","M","B","T","Q","Qi","Sx","Sp","Oc","N"};
-const char *str_limits_prefixs_rate[11] = {"","K","M","G","T","P","E","Z","Y","R","Q"};
+const char *str_limits_prefixs_total[7] = {"M","G","T","P","E","Z","Y"};
+const char *str_limits_prefixs_rate[7] = {"M","G","T","P","E","Z","Y"};
 const char *str_limits[7] = {"1000000","1000000000","1000000000000","1000000000000000","1000000000000000000","1000000000000000000000","1000000000000000000000000"};
 Int int_limits[7];
 
@@ -644,7 +644,13 @@ void save_checkpoint_address(int bits) {
     FILE *f = fopen(filename, "wb");
     if (f) {
         if (FLAGBSGSMODE == 6) { // hybrid chunk
-            fprintf(f, "ADDR6\n%d\n%d\n%" PRIu64 "\n%" PRIu64 "\n", bits, FLAGBSGSMODE, global_chunk_counter.load(), chunk_step);
+            uint64_t safe_count = global_chunk_counter.load();
+            if (safe_count > (uint64_t)NTHREADS) {
+                safe_count -= NTHREADS; 
+            } else {
+                safe_count = 0;
+            }
+            fprintf(f, "ADDR6\n%d\n%d\n%" PRIu64 "\n%" PRIu64 "\n", bits, FLAGBSGSMODE, safe_count, chunk_step);
         } else if (FLAGBSGSMODE == 4) { // partitioned
             char *original_start_hex = n_range_start_original.GetBase16();
             char *range_end_hex = n_range_end_original.GetBase16();
@@ -2515,7 +2521,10 @@ int main(int argc, char **argv)	{
 				}
 				else	{
 					if(FLAGSEARCH == SEARCH_COMPRESS)	{
-						total.Mult(2);
+						total.Mult(2);	// compressed 02 + 03
+					}
+					else if(FLAGSEARCH == SEARCH_BOTH)	{
+						total.Mult(3);	// compressed 02, 03 + uncompressed
 					}
 				}
 				
@@ -2574,6 +2583,20 @@ int main(int argc, char **argv)	{
 							range_progress.Add(&thread_diff);
 						}
 						total.Set(&range_progress);
+					} else if (FLAGBSGSMODE == 6) {
+						// Hybrid: progresso baseado em chunks processados
+						uint64_t chunks_done = global_chunk_counter.load();
+						uint64_t hybrid_chunk_size = (uint64_t)CPU_GRP_SIZE * (uint64_t)KFACTOR;
+						if (hybrid_chunk_size < 1048576) hybrid_chunk_size = 1048576;
+						Int chunks_int;
+						chunks_int.SetInt64(chunks_done);
+						Int chunk_size_int;
+						chunk_size_int.SetInt64(hybrid_chunk_size);
+						range_progress.Set(&chunks_int);
+						range_progress.Mult(&chunk_size_int);
+						if (range_progress.IsGreater(&range_total)) {
+							range_progress.Set(&range_total);
+						}
 					} else if (FLAGMODE == MODE_BSGS) {
 						range_progress.Set(&BSGS_CURRENT);
 						range_progress.Sub(&n_range_start_original);
@@ -2592,7 +2615,7 @@ int main(int argc, char **argv)	{
 					rate_per_sec.Div(&seconds);
 					
 					Int remaining_keys;
-					if (FLAGBSGSMODE == 4) {
+					if (FLAGBSGSMODE == 4 || FLAGBSGSMODE == 6) {
 						remaining_keys.Set(&range_total);
 						remaining_keys.Sub(&range_progress);
 					} else {
@@ -2668,12 +2691,12 @@ int main(int argc, char **argv)	{
 						
 						Int div_total_keys;
 						int total_keys_index = 0;
-						for (int i = 0; i < 11; i++) {
+						for (int i = 0; i < 7; i++) {
 							if (total.IsLower(&int_limits[i])) {
 								total_keys_index = (i > 0) ? i - 1 : 0;
 								break;
 							}
-							if (i == 10) total_keys_index = 10;
+							if (i == 6) total_keys_index = 6;
 						}
 						div_total_keys.Set(&total);
 						div_total_keys.Div(&int_limits[total_keys_index]);
@@ -2681,16 +2704,20 @@ int main(int argc, char **argv)	{
 						
 						Int div_rate_both;
 						int rate_both_index = 0;
-						for (int i = 0; i < 10; i++) {
+						for (int i = 0; i < 7; i++) {
 							if (pretotal.IsLower(&int_limits[i])) {
 								rate_both_index = (i > 0) ? i - 1 : 0;
 								break;
 							}
-							if (i == 9) rate_both_index = 9;
+							if (i == 6) rate_both_index = 6;
 						}
 						div_rate_both.Set(&pretotal);
+						div_rate_both.Mult(10);
 						div_rate_both.Div(&int_limits[rate_both_index]);
-						char* str_rate_both_fmt = div_rate_both.GetBase10();
+						int rate_both_val = div_rate_both.GetInt32();
+						char str_rate_both_buf[32];
+						sprintf(str_rate_both_buf, "%d.%d", rate_both_val / 10, rate_both_val % 10);
+						char* str_rate_both_fmt = str_rate_both_buf;
 						
 						filled = (pct_total * bar_width) / 100;
 						empty = bar_width - filled;
@@ -2706,7 +2733,6 @@ int main(int argc, char **argv)	{
 						
 						free(str_eta_both);
 						free(str_total_keys_fmt);
-						free(str_rate_both_fmt);
 					}
 					else {
 						filled = (pct * bar_width) / 100;
@@ -2720,12 +2746,12 @@ int main(int argc, char **argv)	{
 						
 						Int div_total;
 						int total_index = 0;
-						for (int i = 0; i < 11; i++) {
+						for (int i = 0; i < 7; i++) {
 							if (total.IsLower(&int_limits[i])) {
 								total_index = (i > 0) ? i - 1 : 0;
 								break;
 							}
-							if (i == 10) total_index = 10;
+							if (i == 6) total_index = 6;
 						}
 						div_total.Set(&total);
 						div_total.Div(&int_limits[total_index]);
@@ -2733,22 +2759,25 @@ int main(int argc, char **argv)	{
 						
 						Int div_rate;
 						int rate_index = 0;
-						for (int i = 0; i < 10; i++) {
+						for (int i = 0; i < 7; i++) {
 							if (pretotal.IsLower(&int_limits[i])) {
 								rate_index = (i > 0) ? i - 1 : 0;
 								break;
 							}
-							if (i == 9) rate_index = 9;
+							if (i == 6) rate_index = 6;
 						}
 						div_rate.Set(&pretotal);
+						div_rate.Mult(10);
 						div_rate.Div(&int_limits[rate_index]);
-						char* str_rate_fmt = div_rate.GetBase10();
+						int rate_val = div_rate.GetInt32();
+						char str_rate_buf[32];
+						sprintf(str_rate_buf, "%d.%d", rate_val / 10, rate_val % 10);
+						char* str_rate_fmt = str_rate_buf;
 						
 						sprintf(buffer, "\r%s %3d%% | Keys: %s %s | Rate: %s %s/s | ETA: %ss ", 
 							bar, pct, str_total_fmt, str_limits_prefixs_total[total_index], str_rate_fmt, str_limits_prefixs_rate[rate_index], str_eta);
 						
 						free(str_total_fmt);
-						free(str_rate_fmt);
 					}
 					
 					printf("%s", buffer);
@@ -2767,12 +2796,12 @@ int main(int argc, char **argv)	{
 					// Formatar total de chaves com prefixo (M, G, T, etc)
 					Int div_total;
 					int total_index = 0;
-					for (int i = 0; i < 11; i++) {
+					for (int i = 0; i < 7; i++) {
 						if (total.IsLower(&int_limits[i])) {
 							total_index = (i > 0) ? i - 1 : 0;
 							break;
 						}
-						if (i == 10) total_index = 10;
+						if (i == 6) total_index = 6;
 					}
 					div_total.Set(&total);
 					div_total.Div(&int_limits[total_index]);
@@ -2780,23 +2809,26 @@ int main(int argc, char **argv)	{
 					
 					Int div_rate;
 					int rate_index = 0;
-					for (int i = 0; i < 10; i++) {
+					for (int i = 0; i < 7; i++) {
 						if (pretotal.IsLower(&int_limits[i])) {
 							rate_index = (i > 0) ? i - 1 : 0;
 							break;
 						}
-						if (i == 9) rate_index = 9;
+						if (i == 6) rate_index = 6;
 					}
 					div_rate.Set(&pretotal);
+					div_rate.Mult(10);
 					div_rate.Div(&int_limits[rate_index]);
-					char* str_rate_fmt = div_rate.GetBase10();
+					int rate_val_r = div_rate.GetInt32();
+					char str_rate_buf_r[32];
+					sprintf(str_rate_buf_r, "%d.%d", rate_val_r / 10, rate_val_r % 10);
+					char* str_rate_fmt = str_rate_buf_r;
 					
 					sprintf(buffer, "\r[Random] Keys: %s %s | Rate: %s %s/s | Time: %02d:%02d:%02d ", 
 						str_total_fmt, str_limits_prefixs_total[total_index], str_rate_fmt, str_limits_prefixs_rate[rate_index], hrs, mins, secs);
 					printf("%s", buffer);
 					fflush(stdout);
 					free(str_total_fmt);
-					free(str_rate_fmt);
 				}
 				else {
 					printf("%s", buffer);
@@ -7124,52 +7156,59 @@ void *thread_process_hybrid_chunk(void *vargp)	{
 	thread_number = tt->nt;
 	
     // NUM_CHUNKS Calculation:
+    // Garante granularidade minima de 1M chaves para amortizar o custo do ComputePublicKey
     uint64_t local_chunk_size = CPU_GRP_SIZE * (uint64_t)KFACTOR;
-    if (local_chunk_size == 0) local_chunk_size = CPU_GRP_SIZE;
-    
-    // total diff / local_chunk_size
-    // For large numbers, we can use Int
+    if (local_chunk_size < 1048576) local_chunk_size = 1048576; 
+
     Int TOTAL_RANGE_START_INT;
     TOTAL_RANGE_START_INT.Set(&n_range_start_original);
     Int RANGE_DIFF;
     RANGE_DIFF.Set(&n_range_diff);
-    
-    // Simple integer division via shift or loop can be slow if done via BigInt, but RANGE_DIFF is huge. We just divide diff by local_chunk_size
+
     Int BIG_CHUNK_SIZE;
     BIG_CHUNK_SIZE.SetInt64(local_chunk_size);
     Int BIG_NUM_CHUNKS;
     BIG_NUM_CHUNKS.Set(&RANGE_DIFF);
     BIG_NUM_CHUNKS.Div(&BIG_CHUNK_SIZE);
-    
-    // NUM_CHUNKS might still be larger than 64-bit if bitrange > 84, but usually Puzzle 71 -> 2^71 / 2^20 = 2^51. Fits in uint64_t.
-    uint64_t total_chunks = BIG_NUM_CHUNKS.GetInt64();
-    if (total_chunks == 0) total_chunks = 1;
+
+    // FIX: Para puzzles grandes (71+) o numero de chunks nao cabe em uint64_t via GetInt64().
+    // Usamos uma verificacao segura: se BIG_NUM_CHUNKS > UINT64_MAX, limitamos em UINT64_MAX.
+    // O loop e INFINITO (termina apenas por SHOULD_SAVE / GLOBAL_MATCH_FOUND).
+    // O chunk_step embaralha o espaco de busca de forma deterministica sem precisar de limite.
+    static const Int UINT64_MAX_INT = []() {
+        Int v; v.SetBase16("FFFFFFFFFFFFFFFF"); return v;
+    }();
+    uint64_t total_chunks;
+    if (BIG_NUM_CHUNKS.IsGreater(&(const_cast<Int&>(UINT64_MAX_INT)))) {
+        total_chunks = 0xFFFFFFFFFFFFFFFFULL; // cap: busca efetivamente infinita
+    } else {
+        total_chunks = BIG_NUM_CHUNKS.GetInt64();
+        if (total_chunks == 0) total_chunks = 1;
+    }
 
 	free(tt);
 	grp->Set(dx);
 	do {
-        // Puxar da Fila Global
+        // Contador global: cada thread pega um indice unico e deriva o chunk via SplitMix64.
+        // NAO terminamos pelo contador — terminamos apenas por SHOULD_SAVE/GLOBAL_MATCH_FOUND.
         uint64_t my_index = std::atomic_fetch_add(&global_chunk_counter, 1);
-        
-        if (my_index >= total_chunks) {
-            continue_flag = 0;
-            break;
-        }
 
-        // SplitMix64 Hash sobre o my_index * chunk_step para embaralhar os chunks de forma determinística
-        uint64_t x = my_index * chunk_step;
+        // SplitMix64 Hash sobre o my_index * chunk_step para embaralhar deterministicamente
+        uint64_t x = my_index * (chunk_step != 0 ? chunk_step : 0x9e3779b97f4a7c15ULL);
         x ^= x >> 33;
-        x *= 0xff51afd7ed558ccd;
+        x *= 0xff51afd7ed558ccdULL;
         x ^= x >> 33;
-        
+        x *= 0xc4ceb9fe1a85ec53ULL;
+        x ^= x >> 33;
+
         uint64_t active_chunk = x % total_chunks;
 
-        // chunk_start = TOTAL_RANGE_START_INT + active_chunk * local_chunk_size
+        // chunk_start = n_range_start + active_chunk * local_chunk_size
         Int chunk_start;
         chunk_start.SetInt64(active_chunk);
         chunk_start.Mult(&BIG_CHUNK_SIZE);
         chunk_start.Add(&TOTAL_RANGE_START_INT);
-        
+
         key_mpz.Set(&chunk_start);
 
 		if (SHOULD_SAVE || GLOBAL_MATCH_FOUND.load()) {
@@ -7179,7 +7218,11 @@ void *thread_process_hybrid_chunk(void *vargp)	{
 		
 		count = 0;
 		bool startP_valid = false;
-		if(FLAGQUIET == 0){
+		
+		/* Opt: Throttle console output to avoid IO bottleneck. 
+		   Printing to terminal every 1024 keys in 4 threads kills performance on Windows/WSL.
+		   We only update the screen every 1000 chunks in the first thread. */
+		if(FLAGQUIET == 0 && thread_number == 0 && (my_index % 1000 == 0)){
 			hextemp = chunk_start.GetBase16();
 			printf("\rBase key: %s     \r",hextemp);
 			fflush(stdout);
@@ -7277,118 +7320,245 @@ void *thread_process_hybrid_chunk(void *vargp)	{
 				endomorphism_beta2[CPU_GRP_SIZE - 1].y.Set(&pts[CPU_GRP_SIZE - 1].y);
 			}
 			
-			for(int i=0;i<4;i++)	{
-				pts[i] = pts[4];
-			}
-			
-			if(loc_is_eth)	{
-				for(k=CPU_GRP_SIZE/2; k<CPU_GRP_SIZE; k++) {
-					generate_binaddress_eth(pts[k],(unsigned char*)publickeyhashrmd160_uncompress[0]);
-					r = searchbinary(addressTable,publickeyhashrmd160_uncompress[0],N);
-					if(r) {
-						keyfound.SetInt32(k);
-						keyfound.Mult(&stride);
-						keyfound.Add(&key_mpz);
-						writekeyeth(&keyfound);
-                        GLOBAL_MATCH_FOUND.store(true);
+			for(j = 0; j < CPU_GRP_SIZE/4; j++){
+				if(loc_mode == MODE_ADDRESS && loc_is_btc && !loc_endo) {
+					if(do_compress) {
+						secp->GetHash160_fromX(P2PKH,0x02,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[0][0],(uint8_t*)publickeyhashrmd160_endomorphism[0][1],(uint8_t*)publickeyhashrmd160_endomorphism[0][2],(uint8_t*)publickeyhashrmd160_endomorphism[0][3]);
+						secp->GetHash160_fromX(P2PKH,0x03,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[1][0],(uint8_t*)publickeyhashrmd160_endomorphism[1][1],(uint8_t*)publickeyhashrmd160_endomorphism[1][2],(uint8_t*)publickeyhashrmd160_endomorphism[1][3]);
 					}
-				}
-			}
-			else if(loc_is_btc)	{
-				for(k=CPU_GRP_SIZE/2; k<CPU_GRP_SIZE; k+=4) {
-					if(do_compress)	{
-						for(l=0;l<4;l++) {
-							secp->GetHash160(P2PKH,true,pts[k+l],(uint8_t*)publickeyhashrmd160);
-							r = searchbinary(addressTable,publickeyhashrmd160,N);
-							if(r) {
-								keyfound.SetInt32(k+l);
-								keyfound.Mult(&stride);
-								keyfound.Add(&key_mpz);
-								writekey(true,&keyfound);
-                                GLOBAL_MATCH_FOUND.store(true);
-							}
-							if(loc_endo)	{
-								secp->GetHash160(P2PKH,true,endomorphism_beta[k+l],(uint8_t*)publickeyhashrmd160_endomorphism[0][l]);
-								r = searchbinary(addressTable,publickeyhashrmd160_endomorphism[0][l],N);
+					if(do_uncompress) {
+						secp->GetHash160(P2PKH,false,pts[(j*4)],pts[(j*4)+1],pts[(j*4)+2],pts[(j*4)+3],(uint8_t*)publickeyhashrmd160_uncompress[0],(uint8_t*)publickeyhashrmd160_uncompress[1],(uint8_t*)publickeyhashrmd160_uncompress[2],(uint8_t*)publickeyhashrmd160_uncompress[3]);
+					}
+
+					for(k = 0; k < 4; k++) {
+						if(do_compress) {
+							for(l = 0; l < 2; l++) {
+								r = cuckoo_check(&cuckoo,publickeyhashrmd160_endomorphism[l][k],loc_maxlen);
 								if(r) {
-									keyfound.SetInt32(k+l);
-									keyfound.Mult(&stride);
-									keyfound.Add(&key_mpz);
-									publickey = secp->ComputePublicKey(&keyfound);
-									secp->GetHash160(P2PKH,true,publickey,(uint8_t*)publickeyhashrmd160);
-									if(memcmp(publickeyhashrmd160_endomorphism[0][l],publickeyhashrmd160,20) == 0)	{
+									r = searchbinary(addressTable,publickeyhashrmd160_endomorphism[l][k],N);
+									if(r) {
+										keyfound.SetInt32(j*4 + k);
+										keyfound.Mult(&stride);
+										keyfound.Add(&key_mpz);
+										publickey = secp->ComputePublicKey(&keyfound);
+										secp->GetHash160(P2PKH,true,publickey,(uint8_t*)publickeyhashrmd160);
+										if(memcmp(publickeyhashrmd160_endomorphism[l][k],publickeyhashrmd160,20) != 0)	{
+											keyfound.Neg();
+											keyfound.Add(&secp->order);
+										}
 										writekey(true,&keyfound);
-                                        GLOBAL_MATCH_FOUND.store(true);
-									}
-								}
-								secp->GetHash160(P2PKH,true,endomorphism_beta2[k+l],(uint8_t*)publickeyhashrmd160_endomorphism[1][l]);
-								r = searchbinary(addressTable,publickeyhashrmd160_endomorphism[1][l],N);
-								if(r) {
-									keyfound.SetInt32(k+l);
-									keyfound.Mult(&stride);
-									keyfound.Add(&key_mpz);
-									publickey = secp->ComputePublicKey(&keyfound);
-									secp->GetHash160(P2PKH,true,publickey,(uint8_t*)publickeyhashrmd160);
-									if(memcmp(publickeyhashrmd160_endomorphism[1][l],publickeyhashrmd160,20) == 0)	{
-										writekey(true,&keyfound);
-                                        GLOBAL_MATCH_FOUND.store(true);
+										GLOBAL_MATCH_FOUND.store(true);
 									}
 								}
 							}
 						}
-					}
-					if(do_uncompress)	{
-						for(l=0;l<4;l++) {
-							secp->GetHash160(P2PKH,false,pts[k+l],(uint8_t*)publickeyhashrmd160_uncompress[l]);
-							r = searchbinary(addressTable,publickeyhashrmd160_uncompress[l],N);
+						if(do_uncompress) {
+							r = cuckoo_check(&cuckoo,publickeyhashrmd160_uncompress[k],loc_maxlen);
 							if(r) {
-								keyfound.SetInt32(k+l);
-								keyfound.Mult(&stride);
-								keyfound.Add(&key_mpz);
-								writekey(false,&keyfound);
-                                GLOBAL_MATCH_FOUND.store(true);
-							}
-							if(loc_endo)	{
-								secp->GetHash160(P2PKH,false,endomorphism_beta[k+l],(uint8_t*)publickeyhashrmd160_endomorphism[0][l]);
-								r = searchbinary(addressTable,publickeyhashrmd160_endomorphism[0][l],N);
-								if(r) {												
-									keyfound.SetInt32(k+l);
+								r = searchbinary(addressTable,publickeyhashrmd160_uncompress[k],N);
+								if(r) {
+									keyfound.SetInt32(j*4 + k);
 									keyfound.Mult(&stride);
 									keyfound.Add(&key_mpz);
-									publickey = secp->ComputePublicKey(&keyfound);
-									secp->GetHash160(P2PKH,false,publickey,(uint8_t*)publickeyhashrmd160);
-									if(memcmp(publickeyhashrmd160_endomorphism[0][l],publickeyhashrmd160,20) == 0)	{
-										writekey(false,&keyfound);
-                                        GLOBAL_MATCH_FOUND.store(true);
-									}
-								}
-								secp->GetHash160(P2PKH,false,endomorphism_beta2[k+l],(uint8_t*)publickeyhashrmd160_endomorphism[1][l]);
-								r = searchbinary(addressTable,publickeyhashrmd160_endomorphism[1][l],N);
-								if(r) {												
-									keyfound.SetInt32(k+l);
-									keyfound.Mult(&stride);
-									keyfound.Add(&key_mpz);
-									publickey = secp->ComputePublicKey(&keyfound);
-									secp->GetHash160(P2PKH,false,publickey,(uint8_t*)publickeyhashrmd160);
-									if(memcmp(publickeyhashrmd160_endomorphism[1][l],publickeyhashrmd160,20) == 0)	{
-										writekey(false,&keyfound);
-                                        GLOBAL_MATCH_FOUND.store(true);
-									}
+									writekey(false,&keyfound);
+									GLOBAL_MATCH_FOUND.store(true);
 								}
 							}
 						}
 					}
+					continue;
+				}
+
+				switch(loc_mode)	{
+					case MODE_ADDRESS:
+						if(loc_is_btc){
+							if(do_compress){
+								if(loc_endo)	{
+									secp->GetHash160_fromX(P2PKH,0x02,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[0][0],(uint8_t*)publickeyhashrmd160_endomorphism[0][1],(uint8_t*)publickeyhashrmd160_endomorphism[0][2],(uint8_t*)publickeyhashrmd160_endomorphism[0][3]);
+									secp->GetHash160_fromX(P2PKH,0x03,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[1][0],(uint8_t*)publickeyhashrmd160_endomorphism[1][1],(uint8_t*)publickeyhashrmd160_endomorphism[1][2],(uint8_t*)publickeyhashrmd160_endomorphism[1][3]);
+									secp->GetHash160_fromX(P2PKH,0x02,&endomorphism_beta[(j*4)].x,&endomorphism_beta[(j*4)+1].x,&endomorphism_beta[(j*4)+2].x,&endomorphism_beta[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[2][0],(uint8_t*)publickeyhashrmd160_endomorphism[2][1],(uint8_t*)publickeyhashrmd160_endomorphism[2][2],(uint8_t*)publickeyhashrmd160_endomorphism[2][3]);
+									secp->GetHash160_fromX(P2PKH,0x03,&endomorphism_beta[(j*4)].x,&endomorphism_beta[(j*4)+1].x,&endomorphism_beta[(j*4)+2].x,&endomorphism_beta[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[3][0],(uint8_t*)publickeyhashrmd160_endomorphism[3][1],(uint8_t*)publickeyhashrmd160_endomorphism[3][2],(uint8_t*)publickeyhashrmd160_endomorphism[3][3]);
+									secp->GetHash160_fromX(P2PKH,0x02,&endomorphism_beta2[(j*4)].x,&endomorphism_beta2[(j*4)+1].x,&endomorphism_beta2[(j*4)+2].x,&endomorphism_beta2[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[4][0],(uint8_t*)publickeyhashrmd160_endomorphism[4][1],(uint8_t*)publickeyhashrmd160_endomorphism[4][2],(uint8_t*)publickeyhashrmd160_endomorphism[4][3]);
+									secp->GetHash160_fromX(P2PKH,0x03,&endomorphism_beta2[(j*4)].x,&endomorphism_beta2[(j*4)+1].x,&endomorphism_beta2[(j*4)+2].x,&endomorphism_beta2[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[5][0],(uint8_t*)publickeyhashrmd160_endomorphism[5][1],(uint8_t*)publickeyhashrmd160_endomorphism[5][2],(uint8_t*)publickeyhashrmd160_endomorphism[5][3]);
+								} else {
+									secp->GetHash160_fromX(P2PKH,0x02,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[0][0],(uint8_t*)publickeyhashrmd160_endomorphism[0][1],(uint8_t*)publickeyhashrmd160_endomorphism[0][2],(uint8_t*)publickeyhashrmd160_endomorphism[0][3]);
+									secp->GetHash160_fromX(P2PKH,0x03,&pts[(j*4)].x,&pts[(j*4)+1].x,&pts[(j*4)+2].x,&pts[(j*4)+3].x,(uint8_t*)publickeyhashrmd160_endomorphism[1][0],(uint8_t*)publickeyhashrmd160_endomorphism[1][1],(uint8_t*)publickeyhashrmd160_endomorphism[1][2],(uint8_t*)publickeyhashrmd160_endomorphism[1][3]);
+								}
+							}
+							if(do_uncompress){
+								if(loc_endo)	{
+									for(l = 0; l < 4; l++)	{
+										endomorphism_negeted_point[l] = secp->Negation(pts[(j*4)+l]);
+									}
+									secp->GetHash160(P2PKH,false, pts[(j*4)], pts[(j*4)+1], pts[(j*4)+2], pts[(j*4)+3],(uint8_t*)publickeyhashrmd160_endomorphism[6][0],(uint8_t*)publickeyhashrmd160_endomorphism[6][1],(uint8_t*)publickeyhashrmd160_endomorphism[6][2],(uint8_t*)publickeyhashrmd160_endomorphism[6][3]);
+									secp->GetHash160(P2PKH,false,endomorphism_negeted_point[0] ,endomorphism_negeted_point[1],endomorphism_negeted_point[2],endomorphism_negeted_point[3],(uint8_t*)publickeyhashrmd160_endomorphism[7][0],(uint8_t*)publickeyhashrmd160_endomorphism[7][1],(uint8_t*)publickeyhashrmd160_endomorphism[7][2],(uint8_t*)publickeyhashrmd160_endomorphism[7][3]);
+									for(l = 0; l < 4; l++)	{
+										endomorphism_negeted_point[l] = secp->Negation(endomorphism_beta[(j*4)+l]);
+									}
+									secp->GetHash160(P2PKH,false,endomorphism_beta[(j*4)],  endomorphism_beta[(j*4)+1], endomorphism_beta[(j*4)+2], endomorphism_beta[(j*4)+3] ,(uint8_t*)publickeyhashrmd160_endomorphism[8][0],(uint8_t*)publickeyhashrmd160_endomorphism[8][1],(uint8_t*)publickeyhashrmd160_endomorphism[8][2],(uint8_t*)publickeyhashrmd160_endomorphism[8][3]);
+									secp->GetHash160(P2PKH,false,endomorphism_negeted_point[0],endomorphism_negeted_point[1],endomorphism_negeted_point[2],endomorphism_negeted_point[3],(uint8_t*)publickeyhashrmd160_endomorphism[9][0],(uint8_t*)publickeyhashrmd160_endomorphism[9][1],(uint8_t*)publickeyhashrmd160_endomorphism[9][2],(uint8_t*)publickeyhashrmd160_endomorphism[9][3]);
+									for(l = 0; l < 4; l++)	{
+										endomorphism_negeted_point[l] = secp->Negation(endomorphism_beta2[(j*4)+l]);
+									}
+									secp->GetHash160(P2PKH,false, endomorphism_beta2[(j*4)],  endomorphism_beta2[(j*4)+1] ,  endomorphism_beta2[(j*4)+2] ,  endomorphism_beta2[(j*4)+3] ,(uint8_t*)publickeyhashrmd160_endomorphism[10][0],(uint8_t*)publickeyhashrmd160_endomorphism[10][1],(uint8_t*)publickeyhashrmd160_endomorphism[10][2],(uint8_t*)publickeyhashrmd160_endomorphism[10][3]);
+									secp->GetHash160(P2PKH,false, endomorphism_negeted_point[0], endomorphism_negeted_point[1],   endomorphism_negeted_point[2],endomorphism_negeted_point[3],(uint8_t*)publickeyhashrmd160_endomorphism[11][0],(uint8_t*)publickeyhashrmd160_endomorphism[11][1],(uint8_t*)publickeyhashrmd160_endomorphism[11][2],(uint8_t*)publickeyhashrmd160_endomorphism[11][3]);
+								} else	{
+									secp->GetHash160(P2PKH,false,pts[(j*4)],pts[(j*4)+1],pts[(j*4)+2],pts[(j*4)+3],(uint8_t*)publickeyhashrmd160_uncompress[0],(uint8_t*)publickeyhashrmd160_uncompress[1],(uint8_t*)publickeyhashrmd160_uncompress[2],(uint8_t*)publickeyhashrmd160_uncompress[3]);
+								}
+							}
+							for(k = 0; k < 4;k++)	{
+								if(do_compress){
+									if(loc_endo)	{
+										for(l = 0;l < 6; l++)	{
+											r = cuckoo_check(&cuckoo,publickeyhashrmd160_endomorphism[l][k],loc_maxlen);
+											if(r) {
+												r = searchbinary(addressTable,publickeyhashrmd160_endomorphism[l][k],N);
+												if(r) {
+													keyfound.SetInt32(j*4 + k);
+													keyfound.Mult(&stride);
+													keyfound.Add(&key_mpz);
+													publickey = secp->ComputePublicKey(&keyfound);
+													switch(l)	{
+														case 0:	break;
+														case 1:	break;
+														case 2:	keyfound.ModMulK1order(&lambda); break;
+														case 3:	keyfound.ModMulK1order(&lambda); break;
+														case 4:	keyfound.ModMulK1order(&lambda2); break;
+														case 5:	keyfound.ModMulK1order(&lambda2); break;
+													}
+													if(l % 2 == 0) { // Prefix 02 (Even)
+														if(publickey.y.IsOdd()) { keyfound.Neg(); keyfound.Add(&secp->order); }
+													} else { // Prefix 03 (Odd)
+														if(publickey.y.IsEven()) { keyfound.Neg(); keyfound.Add(&secp->order); }
+													}
+													writekey(true,&keyfound);
+													GLOBAL_MATCH_FOUND.store(true);
+												}
+											}
+										}
+									} else	{
+										for(l = 0;l < 2; l++)	{
+											r = cuckoo_check(&cuckoo,publickeyhashrmd160_endomorphism[l][k],loc_maxlen);
+											if(r) {
+												r = searchbinary(addressTable,publickeyhashrmd160_endomorphism[l][k],N);
+												if(r) {
+													keyfound.SetInt32(j*4 + k);
+													keyfound.Mult(&stride);
+													keyfound.Add(&key_mpz);
+													publickey = secp->ComputePublicKey(&keyfound);
+													if(l == 0 && publickey.y.IsOdd()) { keyfound.Neg(); keyfound.Add(&secp->order); }
+													if(l == 1 && publickey.y.IsEven()) { keyfound.Neg(); keyfound.Add(&secp->order); }
+													writekey(true,&keyfound);
+													GLOBAL_MATCH_FOUND.store(true);
+												}
+											}
+										}
+									}
+								}
+								if(do_uncompress)	{
+									if(loc_endo)	{
+										for(l = 6;l < 12; l++)	{
+											r = cuckoo_check(&cuckoo,publickeyhashrmd160_endomorphism[l][k],loc_maxlen);
+											if(r) {
+												r = searchbinary(addressTable,publickeyhashrmd160_endomorphism[l][k],N);
+												if(r) {
+													keyfound.SetInt32(j*4 + k);
+													keyfound.Mult(&stride);
+													keyfound.Add(&key_mpz);
+													if(l >= 8 && l <= 9) keyfound.ModMulK1order(&lambda);
+													if(l >= 10 && l <= 11) keyfound.ModMulK1order(&lambda2);
+													publickey = secp->ComputePublicKey(&keyfound);
+													secp->GetHash160(P2PKH,false,publickey,(uint8_t*)publickeyhashrmd160);
+													if(memcmp(publickeyhashrmd160_endomorphism[l][k],publickeyhashrmd160,20) != 0){
+														keyfound.Neg();
+														keyfound.Add(&secp->order);
+													}
+													writekey(false,&keyfound);
+													GLOBAL_MATCH_FOUND.store(true);
+												}
+											}
+										}
+									} else	{
+										r = cuckoo_check(&cuckoo,publickeyhashrmd160_uncompress[k],loc_maxlen);
+										if(r) {
+											r = searchbinary(addressTable,publickeyhashrmd160_uncompress[k],N);
+											if(r) {
+												keyfound.SetInt32(j*4 + k);
+												keyfound.Mult(&stride);
+												keyfound.Add(&key_mpz);
+												writekey(false,&keyfound);
+												GLOBAL_MATCH_FOUND.store(true);
+											}
+										}
+									}
+								}
+							}
+						} else if(loc_is_eth) {
+							if(loc_endo)	{
+								for(k = 0; k < 4;k++)	{
+									for(l = 0;l < 6; l++)	{
+										r = cuckoo_check(&cuckoo,publickeyhashrmd160_endomorphism[l][k],loc_maxlen);
+										if(r) {
+											r = searchbinary(addressTable,publickeyhashrmd160_endomorphism[l][k],N);
+											if(r) {												
+												keyfound.SetInt32(j*4 + k);
+												keyfound.Mult(&stride);
+												keyfound.Add(&key_mpz);
+												if(l >= 2 && l <= 3) keyfound.ModMulK1order(&lambda);
+												if(l >= 4 && l <= 5) keyfound.ModMulK1order(&lambda2);
+												publickey = secp->ComputePublicKey(&keyfound);
+												generate_binaddress_eth(publickey,(uint8_t*)publickeyhashrmd160_uncompress[0]);
+												if(memcmp(publickeyhashrmd160_endomorphism[l][k],publickeyhashrmd160_uncompress[0],20) != 0){
+													keyfound.Neg();
+													keyfound.Add(&secp->order);
+												}
+												writekeyeth(&keyfound);	
+												GLOBAL_MATCH_FOUND.store(true);										
+											}
+										}
+									}
+								}
+							} else	{
+								for(k = 0; k < 4;k++)	{
+									generate_binaddress_eth(pts[(4*j)+k],(uint8_t*)publickeyhashrmd160_uncompress[k]);
+									r = cuckoo_check(&cuckoo,publickeyhashrmd160_uncompress[k],loc_maxlen);
+									if(r) {
+										r = searchbinary(addressTable,publickeyhashrmd160_uncompress[k],N);
+										if(r) {
+											keyfound.SetInt32(j*4 + k);
+											keyfound.Mult(&stride);
+											keyfound.Add(&key_mpz);
+											writekeyeth(&keyfound);
+											GLOBAL_MATCH_FOUND.store(true);
+										}
+									}
+								}
+							}
+						}
+					break;
 				}
 			}
 			
-			steps_add_relaxed(thread_number, CPU_GRP_SIZE);
+			steps_add_relaxed(thread_number, 1);
 			count += CPU_GRP_SIZE;
-            current_chunk_progress += CPU_GRP_SIZE;
+			current_chunk_progress += CPU_GRP_SIZE;
 
 			temp_stride.SetInt32(CPU_GRP_SIZE);
 			temp_stride.Mult(&stride);
 			key_mpz.Add(&temp_stride);
-			startP = pts[CPU_GRP_SIZE - 1];
+
+			// Next start point (startP + GRP_SIZE*G) - ECC Fast Jump
+			pp = startP;
+			dy.ModSub(&_2Gn.y,&pp.y);
+			_s.ModMulK1(&dy,&dx[hLength + 1]);
+			_p.ModSquareK1(&_s);
+			pp.x.ModNeg();
+			pp.x.ModAdd(&_p);
+			pp.x.ModSub(&_2Gn.x);
+			pp.y.ModSub(&_2Gn.x,&pp.x);
+			pp.y.ModMulK1(&_s);
+			pp.y.ModSub(&_2Gn.y);
+			startP = pp;
 
 		} while(current_chunk_progress < local_chunk_size && !SHOULD_SAVE && !GLOBAL_MATCH_FOUND.load());
 
